@@ -1,0 +1,7 @@
+{
+  "mcpPort": 4323,
+  "toolsPort": 4322,
+  "logLevel": "info",
+  "heartbeatInterval": 30000,
+  "connectionTimeout": 120000
+}

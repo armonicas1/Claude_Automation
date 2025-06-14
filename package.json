@@ -1,0 +1,24 @@
+{
+  "name": "claude-desktop-extension",
+  "version": "1.0.0",
+  "description": "MCP extension for Claude Desktop",
+  "main": "src/custom-claude-mcp.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/custom-claude-mcp.js",
+    "start:bridge": "node src/claude-desktop-bridge.js",
+    "start:all": "node scripts/start-services.js",
+    "start:dev-hub": "node src/dev-hub-mcp-server.js",
+    "start:gateway": "node src/claude-desktop-gateway.js",
+    "start:model-gateway": "node scripts/start-model-gateway.js",
+    "test:code-to-desktop": "node scripts/test-code-to-desktop.js",
+    "test:dev-hub": "node scripts/test-dev-hub.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.18.0"
+  }
+}

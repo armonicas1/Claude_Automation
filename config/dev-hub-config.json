@@ -1,0 +1,6 @@
+{
+  "port": 4323,
+  "browserToolsPort": 4322,
+  "heartbeatIntervalMs": 30000,
+  "logLevel": "info"
+}
