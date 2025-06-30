@@ -8,6 +8,42 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 
+// WSL Authentication Auto-Detection
+function detectAndSetWslAuth() {
+  // Only auto-detect if ANTHROPIC_API_KEY is not already set
+  if (process.env.ANTHROPIC_API_KEY) {
+    return;
+  }
+
+  // Try multiple paths based on platform
+  const wslCredentialsPaths = [
+    '/home/dimas/.claude/.credentials.json',  // Direct WSL path (if running in WSL)
+    'C:\\Users\\dimas\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc\\LocalState\\rootfs\\home\\dimas\\.claude\\.credentials.json',  // Windows to WSL path
+    '\\\\wsl$\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json',  // WSL network path
+    '\\\\wsl.localhost\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json'  // Alternative WSL network path
+  ];
+  
+  try {
+    for (const credentialsPath of wslCredentialsPaths) {
+      if (fs.existsSync(credentialsPath)) {
+        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        
+        if (credentials.claudeAiOauth && credentials.claudeAiOauth.accessToken) {
+          process.env.ANTHROPIC_API_KEY = credentials.claudeAiOauth.accessToken;
+          process.env.CLAUDE_API_KEY = credentials.claudeAiOauth.accessToken;
+          console.log(`[${new Date().toISOString()}] INFO: Auto-detected WSL Claude Code credentials from ${credentialsPath}`);
+          return; // Success, exit early
+        }
+      }
+    }
+  } catch (error) {
+    // Silently fail - this is auto-detection, not critical
+  }
+}
+
+// Run WSL auth detection immediately
+detectAndSetWslAuth();
+
 // Calculate absolute paths regardless of working directory
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');

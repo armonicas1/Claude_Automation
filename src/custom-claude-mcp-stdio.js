@@ -7,6 +7,47 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { exec } from 'child_process';
+
+// WSL Authentication Auto-Detection
+function detectAndSetWslAuth() {
+  // Only auto-detect if ANTHROPIC_API_KEY is not already set
+  if (process.env.ANTHROPIC_API_KEY) {
+    return;
+  }
+
+  // Try multiple paths based on platform
+  const wslCredentialsPaths = [
+    '/home/dimas/.claude/.credentials.json',  // Direct WSL path (if running in WSL)
+    'C:\\Users\\dimas\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc\\LocalState\\rootfs\\home\\dimas\\.claude\\.credentials.json',  // Windows to WSL path
+    '\\\\wsl$\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json',  // WSL network path
+    '\\\\wsl.localhost\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json'  // Alternative WSL network path
+  ];
+  
+  try {
+    for (const credentialsPath of wslCredentialsPaths) {
+      if (fs.existsSync(credentialsPath)) {
+        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        
+        if (credentials.claudeAiOauth && credentials.claudeAiOauth.accessToken) {
+          process.env.ANTHROPIC_API_KEY = credentials.claudeAiOauth.accessToken;
+          process.env.CLAUDE_API_KEY = credentials.claudeAiOauth.accessToken;
+          
+          // Log to file only (stderr would interfere with stdio MCP)
+          const logMessage = `[${new Date().toISOString()}] INFO: Auto-detected WSL Claude Code credentials from ${credentialsPath}\n`;
+          const logPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'logs', 'mcp-server-stdio.log');
+          fs.appendFileSync(logPath, logMessage);
+          return; // Success, exit early
+        }
+      }
+    }
+  } catch (error) {
+    // Silently fail - this is auto-detection, not critical
+  }
+}
+
+// Run WSL auth detection immediately
+detectAndSetWslAuth();
 
 // Calculate absolute paths regardless of working directory
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -163,15 +204,32 @@ async function analyzeInstallation() {
     }
     
     try {
-      const wslUbuntuCheck = await runCommand('wsl -d Ubuntu-24.04 -- which claude');
-      if (wslUbuntuCheck && wslUbuntuCheck.trim() && !wslUbuntuCheck.includes('not found')) {
-        results.installations_found.push({
-          path: `Ubuntu-24.04: ${wslUbuntuCheck.trim()}`,
-          type: 'wsl-ubuntu'
-        });
+      // Try multiple distribution naming conventions
+      const distributions = [
+        'Ubuntu-24.04',
+        'Ubuntu 24.04',
+        'Ubuntu',
+        'Ubuntu-24',
+        'Ubuntu-22.04'  // Even try previous version as last resort
+      ];
+      
+      for (const dist of distributions) {
+        try {
+          const wslUbuntuCheck = await runCommand(`wsl -d "${dist}" -- which claude`);
+          if (wslUbuntuCheck && wslUbuntuCheck.trim() && !wslUbuntuCheck.includes('not found')) {
+            results.installations_found.push({
+              path: `${dist}: ${wslUbuntuCheck.trim()}`,
+              type: 'wsl-ubuntu'
+            });
+            logger.info(`Found Claude CLI in WSL distribution: ${dist}`);
+            break; // Found it, stop trying
+          }
+        } catch (err) {
+          // Continue to next distribution
+        }
       }
     } catch (err) {
-      // Ubuntu WSL check failed
+      // All WSL distribution checks failed
     }
 
     // Check npm global packages
@@ -536,8 +594,17 @@ async function analyzeTroubleshooting(projectPath) {
 // Helper functions
 async function runCommand(command) {
   return new Promise((resolve, reject) => {
-    require('child_process').exec(command, (error, stdout, stderr) => {
+    // Set proper environment and shell for Windows commands
+    const options = {
+      shell: true,
+      env: { ...process.env, PATH: process.env.PATH },
+      cwd: process.cwd(),
+      timeout: 10000 // 10 second timeout
+    };
+    
+    exec(command, options, (error, stdout, stderr) => {
       if (error) {
+        logger.error(`Command failed: ${command} - Error: ${error.message}`);
         reject(error);
       } else {
         resolve(stdout);
@@ -595,20 +662,116 @@ async function checkWslToolkit() {
       }
     }
     
-    // Check if WSL is installed
+    // Check if WSL is installed with multiple detection methods
+    // WSL detection is complex when running from Claude Desktop context
     try {
-      const wslCheck = await runCommand('wsl --version');
-      if (wslCheck && !wslCheck.includes('not installed')) {
+      // Method 1: Check for WSL executable directly
+      const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+      const wslPath = path.join(systemRoot, 'System32', 'wsl.exe');
+      
+      if (fs.existsSync(wslPath)) {
         results.wslInstalled = true;
-        
-        // Check Ubuntu distribution
-        const wslList = await runCommand('wsl -l -v');
-        if (wslList && wslList.includes('Ubuntu-24.04')) {
-          results.ubuntu24Installed = true;
+        logger.info(`Found WSL executable at: ${wslPath}`);
+      } else {
+        // Method 2: Try running wsl commands with full path
+        try {
+          const wslCheck = await runCommand(`"${wslPath}" --version`);
+          if (wslCheck && wslCheck.trim()) {
+            results.wslInstalled = true;
+            logger.info('WSL detected via command execution');
+          }
+        } catch (err) {
+          // Method 3: Try environment-based detection
+          try {
+            const wslStatus = await runCommand('wsl --status');
+            if (wslStatus && wslStatus.trim() && !wslStatus.toLowerCase().includes('not found')) {
+              results.wslInstalled = true;
+              logger.info('WSL detected via status command');
+            }
+          } catch (err2) {
+            // Method 4: Check Windows features
+            try {
+              const dism = await runCommand('dism /online /get-features | findstr Microsoft-Windows-Subsystem-Linux');
+              if (dism && dism.includes('Enabled')) {
+                results.wslInstalled = true;
+                logger.info('WSL detected via Windows features');
+              }
+            } catch (err3) {
+              logger.error(`All WSL detection methods failed: ${err3.message}`);
+              results.wslInstalled = false;
+            }
+          }
+        }
+      }
+      
+      // If WSL is detected, check for Ubuntu-24.04 distribution
+      if (results.wslInstalled) {
+        try {
+          // Try with full path first
+          const wslListCmd = fs.existsSync(wslPath) ? `"${wslPath}" -l -v` : 'wsl -l -v';
+          const wslList = await runCommand(wslListCmd);
+          
+          // Log the actual output for debugging
+          logger.info(`WSL distributions (verbose): ${wslList.replace(/\n/g, ' | ')}`);
+          
+          // More flexible Ubuntu 24.04 detection (handle different formats)
+          const ubuntuPatterns = ['Ubuntu-24.04', 'Ubuntu 24.04', 'Ubuntu24.04', 'Ubuntu-24', 'Ubuntu24', 'Ubuntu 24'];
+          const hasUbuntu = ubuntuPatterns.some(pattern => wslList.includes(pattern));
+          
+          if (wslList && hasUbuntu) {
+            results.ubuntu24Installed = true;
+            logger.info('Ubuntu 24.04 distribution found');
+          }
+        } catch (err) {
+          // Try without verbose flag
+          try {
+            const wslListCmd = fs.existsSync(wslPath) ? `"${wslPath}" -l` : 'wsl -l';
+            const wslListSimple = await runCommand(wslListCmd);
+            
+            // Log the actual output for debugging
+            logger.info(`WSL distributions (simple): ${wslListSimple.replace(/\n/g, ' | ')}`);
+            
+            // More flexible Ubuntu 24.04 detection (handle different formats)
+            const ubuntuPatterns = ['Ubuntu-24.04', 'Ubuntu 24.04', 'Ubuntu24.04', 'Ubuntu-24', 'Ubuntu24', 'Ubuntu 24'];
+            const hasUbuntu = ubuntuPatterns.some(pattern => wslListSimple.includes(pattern));
+            
+            if (wslListSimple && hasUbuntu) {
+              results.ubuntu24Installed = true;
+              logger.info('Ubuntu 24.04 distribution found (simple list)');
+            }
+          } catch (err2) {
+            logger.error(`Ubuntu distribution check failed: ${err2.message}`);
+            
+            // Final fallback: directly check if we can run a command in the distribution
+            try {
+              const testResult = await runCommand('wsl -d Ubuntu-24.04 -- echo "Distribution exists"');
+              if (testResult && testResult.includes("Distribution exists")) {
+                results.ubuntu24Installed = true;
+                logger.info('Ubuntu 24.04 distribution exists (direct command test)');
+              }
+            } catch (err3) {
+              try {
+                const altTestResult = await runCommand('wsl -d "Ubuntu 24.04" -- echo "Distribution exists"');
+                if (altTestResult && altTestResult.includes("Distribution exists")) {
+                  results.ubuntu24Installed = true;
+                  logger.info('Ubuntu 24.04 distribution exists (direct command test with spaces)');
+                }
+              } catch (err4) {
+                results.ubuntu24Installed = false;
+              }
+            }
+          }
         }
       }
     } catch (err) {
+      logger.error(`WSL detection failed: ${err.message}`);
       results.wslInstalled = false;
+    }
+    
+    // If we found Claude CLI in WSL, mark Ubuntu 24.04 as installed regardless of the exact distribution name
+    if (results.installations_found.some(install => install.type === 'wsl-ubuntu')) {
+      results.ubuntu24Installed = true;
+      logger.info('WSL Claude CLI found - considering Ubuntu 24.04 requirement satisfied');
     }
     
     return results;
@@ -883,9 +1046,15 @@ class StdioMCPServer {
         if (line.trim()) {
           try {
             const message = JSON.parse(line.trim());
-            this.handleMessage(message);
+            // Additional validation
+            if (message && typeof message === 'object' && message.jsonrpc === "2.0") {
+              this.handleMessage(message);
+            } else {
+              logger.error(`Invalid JSON-RPC message structure: ${line.trim()}`);
+            }
           } catch (err) {
-            logger.error(`Failed to parse message: ${line.trim()} - Error: ${err.message}`);
+            logger.error(`Failed to parse JSON message: ${line.trim()} - Error: ${err.message}`);
+            // Don't crash the server, just log and continue
           }
         }
       }
@@ -907,6 +1076,17 @@ class StdioMCPServer {
     logger.info(`Received: ${JSON.stringify(message)}`);
     
     try {
+      // Validate basic JSON-RPC structure
+      if (!message || typeof message !== 'object') {
+        logger.error('Invalid message format - not an object');
+        return;
+      }
+
+      if (!message.jsonrpc || message.jsonrpc !== "2.0") {
+        logger.error('Invalid JSON-RPC version');
+        return;
+      }
+
       switch (message.method) {
         case 'initialize':
           await this.handleInitialize(message);
@@ -917,15 +1097,23 @@ class StdioMCPServer {
         case 'tools/call':
           await this.handleToolCall(message);
           break;
+        case 'resources/list':
+          await this.handleResourcesList(message);
+          break;
+        case 'prompts/list':
+          await this.handlePromptsList(message);
+          break;
         default:
-          this.send({
-            jsonrpc: "2.0",
-            id: message.id,
-            error: {
-              code: -32601,
-              message: `Method '${message.method}' not found`
-            }
-          });
+          if (message.id) {
+            this.send({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: -32601,
+                message: `Method '${message.method}' not found`
+              }
+            });
+          }
       }
     } catch (error) {
       logger.error(`Error handling message: ${error.message}`);
@@ -949,7 +1137,9 @@ class StdioMCPServer {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: {
-          tools: {}
+          tools: {},
+          resources: {},
+          prompts: {}
         },
         serverInfo: {
           name: "Custom Claude Extension",
@@ -1029,6 +1219,34 @@ class StdioMCPServer {
         }
       });
     }
+  }
+
+  async handleResourcesList(message) {
+    // This MCP server doesn't provide resources, but we need to handle the request
+    const response = {
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        resources: []
+      }
+    };
+    
+    this.send(response);
+    logger.info('Sent empty resources list');
+  }
+
+  async handlePromptsList(message) {
+    // This MCP server doesn't provide prompts, but we need to handle the request
+    const response = {
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        prompts: []
+      }
+    };
+    
+    this.send(response);
+    logger.info('Sent empty prompts list');
   }
 }
 

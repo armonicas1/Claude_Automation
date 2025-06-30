@@ -46,11 +46,19 @@ claude-desktop-extension/
 
 ## Communication Protocol
 
-The extension uses two methods of communication:
+The extension supports two methods of communication:
 
-1. **MCP Protocol (WebSockets)**:
-   - Claude Desktop connects to the MCP server via WebSockets
-   - JSON-RPC 2.0 format for requests and responses
+1. **MCP Protocol**:
+   - **Stdio Transport (✅ Recommended)**:
+     - Claude Desktop connects directly to the MCP server via stdin/stdout
+     - Reliable, direct communication with no networking issues
+     - Improved stability and reduced error rates
+   
+   - **WebSocket Transport (Legacy)**:
+     - Claude Desktop connects to the MCP server via WebSockets
+     - Requires port management and can have network-related issues
+   
+   - Both methods use JSON-RPC 2.0 format for requests and responses
    - Used for real-time interactions (e.g., tool calls)
 
 2. **Shared State Files**:
@@ -93,11 +101,14 @@ The `session_state.json` file in the Claude directory serves as the shared state
 
 The custom MCP server implements the Model Context Protocol that Claude Desktop uses to communicate with external tools. Key features:
 
-- **WebSocket Server**: Listens on port 4323 (configurable)
-- **Identity Endpoint**: Provides server identity at `/.identity`
+- **Transport Options**:
+  - **Stdio (✅ Recommended)**: Direct stdin/stdout communication (`custom-claude-mcp-stdio.js`)
+  - **WebSocket (Legacy)**: WebSocket server on port 4323 (`custom-claude-mcp.js`)
+- **Identity Endpoint**: Provides server identity info
 - **Tool Registration**: Registers tools that Claude can use
 - **Plugin System**: Loads additional tools from plugins directory
 - **JSON-RPC 2.0**: Uses standard RPC format for communication
+- **Lock File Mechanism**: Prevents multiple instances from running concurrently
 
 ## Bridge Process
 

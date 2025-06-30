@@ -9,7 +9,8 @@ param(
 # 2. Updates configurations
 # 3. Starts Claude Desktop in administrator mode
 # 4. Sets up real-time log monitoring
-# 5. Starts the bridge process
+# 5. Syncs WSL Claude Code authentication for MCP analyzer tools
+# 6. Starts the bridge process
 
 # Request elevation if not already running as admin
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
@@ -157,11 +158,26 @@ function Start-ClaudeDesktopWithMonitoring {
     Write-Host "Waiting for Claude Desktop to initialize..." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
 
-    # 5. Start bridge process
+    # 5. Sync WSL authentication before starting services
+    Write-Host "Syncing WSL Claude Code authentication..." -ForegroundColor Yellow
+    $authSyncScript = Join-Path $PSScriptRoot "scripts\sync-wsl-auth.js"
+    if (Test-Path $authSyncScript) {
+        try {
+            node $authSyncScript | Out-Host
+            Write-Host "WSL authentication sync completed" -ForegroundColor Green
+        } catch {
+            Write-Host "Warning: WSL auth sync failed: $_" -ForegroundColor Yellow
+            Write-Host "MCP analyzer tools may require manual API key setup" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "WSL auth sync script not found, skipping..." -ForegroundColor Yellow
+    }
+
+    # 6. Start bridge process
     Write-Host "Starting bridge process..." -ForegroundColor Yellow
     Start-Process powershell.exe -ArgumentList "-NoExit -Command `"& {`$host.UI.RawUI.WindowTitle = 'Claude Desktop Bridge'; node '$bridgePath'}`""
 
-    # Test MCP server connection
+    # 7. Test MCP server connection
     Write-Host "Testing MCP server connection..." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
     try {
@@ -176,7 +192,7 @@ function Start-ClaudeDesktopWithMonitoring {
         Write-Host "Error connecting to MCP server: $_" -ForegroundColor Red
     }
 
-    # Create a test trigger
+    # 8. Create a test trigger
     Write-Host "Creating a test trigger file..." -ForegroundColor Yellow
     $triggerDir = "$claudeDir\code_triggers"
     if (-not (Test-Path $triggerDir)) {
