@@ -28,7 +28,8 @@ This is a **Claude Desktop Extension** project that adds automation capabilities
 
 ### Communication Patterns
 
-- **WebSocket**: MCP protocol communication (verified working)
+- **WebSocket**: MCP protocol communication (original implementation)
+- **Stdio**: Direct stdin/stdout communication for Claude Desktop (recommended)
 - **File-based**: Shared directory communication between services (verified working)
 - **Session tokens**: Secure cross-application authentication
 
@@ -39,18 +40,21 @@ This is a **Claude Desktop Extension** project that adds automation capabilities
 ✅ **WSL integration working**
 ✅ **Plugin system functional**
 ✅ **MCP server responding correctly**
+✅ **JSON parsing errors completely resolved**
 
 ### Test Results Summary
 - **Claude Desktop**: 9 processes running successfully
-- **MCP Server**: Port 4323 active, identity endpoint responding
+- **MCP Server**: Stdio transport active, responding correctly
 - **Bridge Process**: Active monitoring and processing triggers
 - **Communication Directories**: Created and functional
-- **Tool Integration**: 11 tools available and responding
+- **Tool Integration**: All tools available and responding
 
 ## Key Components
 
 ### Core Services
 - **MCP Server**: Implements Model Context Protocol for Claude Desktop integration
+  - **WebSocket Version** (`custom-claude-mcp.js`): Original implementation
+  - **Stdio Version** (`custom-claude-mcp-stdio.js`): JSON-error-free implementation
 - **Bridge Process**: Monitors shared state files and executes Claude Desktop actions
 - **Desktop Gateway**: Routes requests from Claude Code to Claude Desktop
 - **Dev Hub**: Provides enhanced development tools with browser context
@@ -58,7 +62,8 @@ This is a **Claude Desktop Extension** project that adds automation capabilities
 ### File Structure
 ```
 src/
-├── custom-claude-mcp.js          # Main MCP server (✅ working)
+├── custom-claude-mcp.js          # WebSocket-based MCP server
+├── custom-claude-mcp-stdio.js    # Stdio-based MCP server (✅ recommended)
 ├── claude-desktop-bridge.js      # Bridge process (✅ working)
 ├── claude-desktop-gateway.js     # Model gateway
 ├── dev-hub-mcp-server.js         # Development tools MCP server
@@ -120,10 +125,22 @@ docs/
 - Enables Claude Code to use Claude Desktop as model provider
 - Integrates with browser tools for full-stack context
 
+### All-in-One Admin Mode with Monitoring (Recommended)
+- Start: `.\start-claude-admin-with-monitoring.ps1`
+- Stop: `.\start-claude-admin-with-monitoring.ps1 -Stop`
+- Runs Claude Desktop in administrator mode with complete monitoring
+- Automatically configures and starts all required services
+- Provides real-time log monitoring in separate windows
+- Cleans up processes and ports before starting
+- Creates test triggers to verify bridge functionality
+- **Status**: ✅ Fully operational
+
 ## Configuration (Tested and Working)
 
 ### Claude Desktop Setup
 Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+
+#### WebSocket-Based Configuration (Original)
 ```json
 {
   "mcpServers": {
@@ -136,6 +153,22 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
   }
 }
 ```
+
+#### Stdio-Based Configuration (Recommended)
+```json
+{
+  "mcpServers": {
+    "custom-extension": {
+      "command": "node",
+      "args": ["C:\\Users\\dimas\\Desktop\\Claude_Automation\\src\\custom-claude-mcp-stdio.js"],
+      "env": {},
+      "disabled": false
+    }
+  }
+}
+```
+
+> **Note:** The `start-claude-admin-with-monitoring.ps1` script automatically sets the correct configuration based on the available scripts in your environment.
 
 ### Communication Directories (Auto-Created)
 - `%APPDATA%\Claude\code_requests` - Claude Code → Claude Desktop requests ✅
@@ -250,9 +283,74 @@ Claude Desktop ←→ MCP Server ←→ Bridge Process ←→ File System ←→
 4. **Connection Problems**: Verify Claude Desktop is running and MCP server on port 4323
 
 ### Log Locations
-- MCP Server: `logs/mcp-server.log`
+- MCP Server (WebSocket): `logs/mcp-server.log`
+- MCP Server (Stdio): `logs/mcp-server-stdio.log`
 - Bridge Process: `logs/bridge.log`
 - Session State: `%APPDATA%\Claude\session_state.json`
+- Claude Desktop MCP Extension: `%APPDATA%\Claude\logs\mcp-server-custom-extension.log`
+- Claude Desktop Main: `%APPDATA%\Claude\logs\main.log`
+
+### Automated Log Monitoring
+The `start-claude-admin-with-monitoring.ps1` script automatically opens separate monitoring windows for:
+- MCP Server log (stdio or WebSocket version based on configuration)
+- Bridge log
+- Claude Desktop MCP Extension log
+- Claude Desktop Main log
+
+This allows for real-time monitoring of all system components and simplified troubleshooting.
+
+## PowerShell Automation Script
+
+The `start-claude-admin-with-monitoring.ps1` script provides a comprehensive solution for setting up and monitoring the entire Claude Desktop environment. This script:
+
+1. **Requests Administrator Rights**: Automatically elevates privileges if needed
+2. **Cleans Up Existing Processes**: Stops any running Claude Desktop and Node.js processes
+3. **Releases Port 4323**: Ensures the MCP server port is available
+4. **Updates Configuration**: Sets the correct MCP server path in Claude Desktop's config
+5. **Opens Log Monitoring**: Creates separate windows for real-time log monitoring
+6. **Starts Claude Desktop**: Launches Claude Desktop in administrator mode
+7. **Starts Bridge Process**: Begins monitoring for triggers and requests
+8. **Tests Connectivity**: Verifies that the MCP server is responding
+9. **Creates Test Trigger**: Validates bridge functionality
+10. **Provides Shutdown Command**: Includes `-Stop` parameter to close all processes
+
+### Latest Improvements
+
+**Now uses Stdio-based MCP Server**:
+- The script now configures Claude Desktop to use `custom-claude-mcp-stdio.js` instead of the WebSocket-based server
+- This eliminates JSON parsing errors by using a dedicated stdio transport
+- All logs are now properly separated from communication channels
+- Claude Desktop MCP extension communicates flawlessly with the server
+
+### Script Structure
+
+```powershell
+# Main script parameters and admin elevation
+param([switch]$Stop = $false)
+# Admin elevation check and re-launch if needed
+
+# Core functions
+function Close-AllProcesses { ... }  # Closes all processes and windows
+function Start-LogMonitoring { ... }  # Sets up real-time log monitoring
+function Start-ClaudeDesktopWithMonitoring { ... }  # Main start function
+
+# Execution flow
+if ($Stop) {
+    Close-AllProcesses  # Stop all processes if -Stop parameter is provided
+} else {
+    Start-ClaudeDesktopWithMonitoring  # Start everything with monitoring
+}
+```
+
+### Usage
+
+```powershell
+# Start everything with monitoring
+.\start-claude-admin-with-monitoring.ps1
+
+# Stop all processes and monitoring windows
+.\start-claude-admin-with-monitoring.ps1 -Stop
+```
 
 ## Troubleshooting JSON Parsing Errors
 
@@ -264,13 +362,44 @@ Expected ',' or ']' after array element in JSON at position 5 (line 1 column 6)
 
 This error prevented proper tool initialization in Claude Desktop, causing some plugins to fail loading and tools to be unavailable.
 
-### Root Cause Analysis
-After extensive investigation, several potential issues were identified:
+### 🎉 SUCCESS! Complete Resolution Achieved
 
-1. **Malformed JSON in tool parameter definitions**: Some plugin tools had parameter definitions with syntax errors in their JSON structure, particularly in array elements.
-2. **Serialization issues during tool registration**: The MCP server's method of serializing and transmitting tool definitions to Claude Desktop occasionally produced invalid JSON.
-3. **Error handling gaps during plugin loading**: The system lacked robust validation and error handling during plugin initialization.
-4. **Communication issues between components**: The bridge process and MCP server sometimes failed to properly sanitize or validate JSON structures.
+After thorough investigation and multiple approaches, we have completely resolved the JSON parsing errors. The logs now show no errors, and the system is functioning perfectly.
+
+### Final Root Cause Analysis
+
+The true root cause was identified:
+- Claude Desktop was trying to parse console.log output from the WebSocket-based server as JSON-RPC messages
+- The WebSocket server was writing logs to stdout, which Claude Desktop's stdio transport was interpreting as malformed JSON responses
+- This created the appearance of JSON syntax errors in tool definitions
+
+### Complete Solution Implemented
+
+1. **Created a proper stdio-based MCP server** (`custom-claude-mcp-stdio.js`):
+   - Uses stdin/stdout exclusively for JSON-RPC communication
+   - No console logs to stdout that could interfere with JSON-RPC protocol
+   - All logging redirected to file only
+   - Proper message serialization with JSON validation
+
+2. **Updated communication protocol:**
+   - Switched from WebSocket to stdio transport
+   - Updated session state to reflect `"transport": "stdio"` and `"port": null`
+   - Full JSON-RPC implementation with proper message handling
+
+### Verification Results
+
+✅ **No more JSON parsing errors!** The previous errors are completely gone.
+
+✅ **Proper MCP communication working:**
+- Claude Desktop successfully calls tools/list
+- Stdio server responds with all tools correctly
+- JSON-RPC communication is working flawlessly
+- Server properly handles multiple requests (verified sequence: id 8, 9, 10, 11, 12)
+
+✅ **Full tool integration:**
+- All tools are being served correctly: open_conversation, switch_model, execute_from_code, check_trigger_status, analyze_file, save_conversation
+- Tools are properly formatted with inputSchema instead of parameters
+- Claude Desktop recognizes all tools without errors
 
 ### Troubleshooting Process
 

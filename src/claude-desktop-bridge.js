@@ -305,6 +305,24 @@ async function executeAction(action) {
   }
 }
 
+// Function to update bridge status in session state
+function updateBridgeStatus(status) {
+  try {
+    let sessionState = {};
+    if (fs.existsSync(sessionStatePath)) {
+      sessionState = JSON.parse(fs.readFileSync(sessionStatePath, 'utf8'));
+    }
+    
+    sessionState.bridge_status = status;
+    sessionState.last_updated = Date.now();
+    
+    fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
+    logger.info(`Bridge status updated to: ${status}`);
+  } catch (error) {
+    logger.error(`Failed to update bridge status: ${error.message}`);
+  }
+}
+
 // Start bridge
 async function startBridge() {
   try {

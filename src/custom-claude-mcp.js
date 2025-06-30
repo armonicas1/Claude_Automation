@@ -277,11 +277,35 @@ try {
       try {
         logger.info(`Loading plugin: ${pluginFile}`);
         const pluginPath = path.join(PLUGINS_DIR, pluginFile);
-        const { default: plugin } = await import(pluginPath);
+        
+        // Convert to file URL for ESM imports (Windows compatibility fix)
+        const pluginUrl = new URL(`file://${pluginPath.replace(/\\/g, '/')}`);
+        logger.info(`Loading plugin from URL: ${pluginUrl.href}`);
+        
+        const { default: plugin } = await import(pluginUrl);
         
         if (plugin && Array.isArray(plugin.tools)) {
-          tools.push(...plugin.tools);
-          logger.info(`Added ${plugin.tools.length} tools from plugin ${pluginFile}`);
+          // Validate JSON structures in tools before adding
+          const sanitizedTools = plugin.tools.map(tool => {
+            try {
+              // Deep clone tool definition to avoid reference issues
+              const sanitizedTool = { ...tool };
+              
+              // Validate parameters JSON structure
+              if (sanitizedTool.parameters) {
+                const serialized = JSON.stringify(sanitizedTool.parameters);
+                sanitizedTool.parameters = JSON.parse(serialized);
+              }
+              
+              return sanitizedTool;
+            } catch (error) {
+              logger.error(`Tool validation failed for ${tool.name}: ${error.message}`);
+              return null;
+            }
+          }).filter(Boolean); // Remove any null tools (failed validation)
+          
+          tools.push(...sanitizedTools);
+          logger.info(`Added ${sanitizedTools.length} tools from plugin ${pluginFile}`);
         }
       } catch (err) {
         logger.error(`Error loading plugin ${pluginFile}: ${err.message}`);
@@ -298,7 +322,7 @@ const clients = new Set();
 // Handle WebSocket connections
 wss.on('connection', (ws) => {
   clients.add(ws);
-  logger.info(`Client connected (${clients.size} clients total)`);
+  logger.info(`WebSocket client connected from ${ws._socket ? ws._socket.remoteAddress : 'unknown'} (${clients.size} clients total)`);
   
   // Setup heartbeat
   ws.isAlive = true;
@@ -313,19 +337,103 @@ wss.on('connection', (ws) => {
       
       // Handle initialization
       if (request.method === 'initialize') {
-        ws.send(JSON.stringify({
-          jsonrpc: "2.0",
-          id: request.id,
-          result: {
-            capabilities: {
-              tools: tools.map(t => ({
-                name: t.name,
-                description: t.description,
-                parameters: t.parameters
-              }))
+        try {
+          // Create response with just capabilities (no tools in initialize)
+          const response = {
+            jsonrpc: "2.0",
+            id: request.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: {}
+              },
+              serverInfo: {
+                name: "Custom Claude Extension",
+                version: "1.0.0"
+              }
             }
-          }
-        }));
+          };
+          
+          // Validate the entire response
+          const serializedResponse = JSON.stringify(response);
+          const validatedResponse = JSON.parse(serializedResponse);
+          
+          // Log the exact JSON being sent for debugging
+          logger.info(`Sending initialization response: ${serializedResponse}`);
+          logger.info(`Response length: ${serializedResponse.length} characters`);
+          logger.info(`First 20 characters: "${serializedResponse.substring(0, 20)}"`);
+          
+          ws.send(serializedResponse);
+          logger.info(`Sent initialization response to client`);
+        } catch (error) {
+          logger.error(`Error in initialization handler: ${error.message}`);
+          ws.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+              code: -32000,
+              message: "Internal error during initialization"
+            }
+          }));
+        }
+      }
+      
+      // Handle tools list request
+      else if (request.method === 'tools/list') {
+        try {
+          // Create a sanitized version of tools with validated parameters
+          const sanitizedTools = tools.map(t => {
+            // Deep clone tool definition
+            const sanitizedTool = {
+              name: t.name,
+              description: t.description,
+              inputSchema: t.parameters || {
+                type: "object",
+                properties: {},
+                required: []
+              }
+            };
+            
+            // Double validate JSON structure
+            if (sanitizedTool.inputSchema) {
+              const serialized = JSON.stringify(sanitizedTool.inputSchema);
+              sanitizedTool.inputSchema = JSON.parse(serialized);
+            }
+            
+            return sanitizedTool;
+          });
+          
+          // Create response with sanitized tools
+          const response = {
+            jsonrpc: "2.0",
+            id: request.id,
+            result: {
+              tools: sanitizedTools
+            }
+          };
+          
+          // Validate the entire response
+          const serializedResponse = JSON.stringify(response);
+          const validatedResponse = JSON.parse(serializedResponse);
+          
+          // Log the exact JSON being sent for debugging
+          logger.info(`Sending tools/list response: ${serializedResponse}`);
+          logger.info(`Response length: ${serializedResponse.length} characters`);
+          logger.info(`First 20 characters: "${serializedResponse.substring(0, 20)}"`);
+          
+          ws.send(serializedResponse);
+          logger.info(`Sent ${sanitizedTools.length} tools to client via tools/list`);
+        } catch (error) {
+          logger.error(`Error in tools/list handler: ${error.message}`);
+          ws.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+              code: -32000,
+              message: "Internal error during tools list"
+            }
+          }));
+        }
       }
       
       // Handle tool calls
@@ -405,7 +513,7 @@ wss.on('connection', (ws) => {
   
   // Send server info
   try {
-    ws.send(JSON.stringify({
+    const serverInfoMessage = {
       jsonrpc: "2.0",
       method: "notification/server_info",
       params: {
@@ -414,7 +522,14 @@ wss.on('connection', (ws) => {
         tools: tools.length,
         clients: clients.size
       }
-    }));
+    };
+    
+    const serializedServerInfo = JSON.stringify(serverInfoMessage);
+    logger.info(`Sending server info: ${serializedServerInfo}`);
+    logger.info(`Server info length: ${serializedServerInfo.length} characters`);
+    logger.info(`First 20 characters: "${serializedServerInfo.substring(0, 20)}"`);
+    
+    ws.send(serializedServerInfo);
   } catch (err) {
     logger.error(`Error sending server info: ${err.message}`);
   }

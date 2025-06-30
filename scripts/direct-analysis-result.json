@@ -1,0 +1,20 @@
+{
+  "status": "installed",
+  "installations_found": [
+    {
+      "path": "C:\\Users\\dimas\\Desktop\\CLAUDE CODE ToolKIT WSL Edition\\run-claude-code.bat",
+      "type": "wsl-toolkit",
+      "version": "WSL Toolkit (version unknown)",
+      "launchCommand": "\"C:\\Users\\dimas\\Desktop\\CLAUDE CODE ToolKIT WSL Edition\\run-claude-code.bat\""
+    }
+  ],
+  "npm_global_packages": [],
+  "wsl_details": {
+    "wslInstalled": true,
+    "toolkitPath": "C:\\Users\\dimas\\Desktop\\CLAUDE CODE ToolKIT WSL Edition\\run-claude-code.bat"
+  },
+  "recommendations": [
+    "Claude Code CLI is installed and available"
+  ],
+  "error": null
+}
