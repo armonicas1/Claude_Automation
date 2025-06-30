@@ -336,3 +336,106 @@ This document provides detailed documentation for all files in the Claude Automa
 **Relationships**:
 - Entry point for updating configuration on Windows
 - Uses the update-claude-config.js script
+
+## Implementation Details and Runtime Analysis
+
+The following section provides detailed analysis of the actual runtime behavior, interdependencies, and known issues discovered through code inspection.
+
+### Execution Flow
+
+1. The entry point defined in `package.json` is `src/custom-claude-mcp.js`, which starts an MCP server
+2. The MCP server:
+   - Reads configuration from `config/claude-config.json`
+   - Binds to port 4323 (default)
+   - Exposes the MCP identity endpoint at `/.identity`
+   - Dynamically loads all plugins from the `plugins/` directory
+   - Merges plugin tools into its global tools array
+   - Initializes WebSocket handlers for client connections
+
+3. When the system is started via `start-services.js`:
+   - The MCP server is launched first
+   - After a two-second delay, `src/claude-desktop-bridge.js` is started as a separate process
+   - The bridge monitors `AppData/Roaming/Claude/session_state.json` for pending actions
+   - Actions are processed through an event-driven watcher system
+
+### Known Issues
+
+The current implementation has several critical issues that prevent proper functionality:
+
+1. **Missing Bridge Functions**:
+   - The bridge calls `updateBridgeStatus()` in multiple places, but this function is not defined
+   - Several helper functions referenced in `processCodeTrigger()` are missing:
+     - `openConversation`
+     - `switchModel`
+     - `analyzeFile`
+     - `saveConversation`
+   - Since the code uses strict mode (Node ESM default), these undefined references cause runtime errors
+
+2. **Claude Desktop Detection Issues**:
+   - The bridge checks for Claude Desktop using `tasklist /FI "IMAGENAME eq claude.exe"` (lowercase)
+   - However, the actual process name is typically `Claude.exe` with a capital C
+   - This causes the `isClaudeDesktopRunning()` function to always return `false`
+   - The bridge may repeatedly attempt to launch Claude, potentially creating multiple instances
+
+3. **Incomplete Integration**:
+   - The Development Hub server correctly writes requests to `%APPDATA%\\Roaming\\Claude\\code_requests`
+   - However, the bridge lacks the logic to read and process these request files
+   - This causes Dev-Hub calls to stall until timeout (120 seconds)
+
+4. **Platform Dependencies**:
+   - The code hardcodes Windows paths (`AppData\\Roaming`)
+   - No support for macOS (`~/Library/Application Support/Claude`) or Linux (`~/.config/Claude`)
+   - Some functions (like `getProjectStructure()`) use PowerShell commands that are Windows-specific
+
+5. **Session Management Gaps**:
+   - `session-manager.js` creates and maintains `authenticated_sessions.json`
+   - However, no component actually imports or uses its `verifySession` method
+   - Session tokens are effectively never verified or enforced
+
+### Minimal Fixes Required
+
+To make the system operational, these minimal changes are needed:
+
+1. Add the missing bridge status function:
+```js
+function updateBridgeStatus(state) {
+  try {
+    const ss = fs.existsSync(sessionStatePath)
+      ? JSON.parse(fs.readFileSync(sessionStatePath, 'utf8'))
+      : {};
+    ss.bridge_info = ss.bridge_info || {};
+    ss.bridge_info.status = state;
+    ss.bridge_info.timestamp = Date.now();
+    fs.writeFileSync(sessionStatePath, JSON.stringify(ss, null, 2));
+  } catch (err) {
+    logger.error(`updateBridgeStatus failed: ${err.message}`);
+  }
+}
+```
+
+2. Add stub implementations for the missing helper functions:
+```js
+async function openConversation() { return { success: true }; }
+async function switchModel()     { return { success: true }; }
+async function analyzeFile()     { return { success: true }; }
+async function saveConversation(){ return { success: true }; }
+```
+
+3. Fix Claude Desktop detection by modifying the process name check to be case-insensitive
+
+4. Add platform-specific path resolution for Claude configuration directories
+
+### Runtime Dependencies
+
+The project has minimal external dependencies:
+- `ws` - For WebSocket communication
+- `chokidar` - For file system watching
+- `node-fetch` - For HTTP requests
+
+These are correctly specified in `package.json` and resolve properly under Node 18+.
+
+### Node.js Compatibility
+
+- The project is configured as an ES module package (`"type":"module"` in `package.json`)
+- Node.js 18 LTS or newer is recommended to avoid `"ERR_REQUIRE_ESM"` errors
+- Node.js 16 may work but ESM support is experimental in that version
