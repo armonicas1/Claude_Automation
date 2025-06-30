@@ -129,7 +129,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json`:
   "mcpServers": {
     "custom-extension": {
       "command": "node",
-      "args": ["C:\\Users\\dimas\\Desktop\\Claude_Automation-main\\Claude_Automation-main\\src\\custom-claude-mcp.js"],
+      "args": ["C:\\Users\\dimas\\Desktop\\Claude_Automation\\src\\custom-claude-mcp.js"],
       "env": {},
       "disabled": false
     }
@@ -190,7 +190,7 @@ Use the provided WSL toolkit for installing Claude Code:
 
 1. **Installation**: 
    ```bash
-   cd Claude_Automation-main\Claude_Automation-main
+   cd Claude_Automation
    npm install
    ```
 
@@ -785,7 +785,7 @@ For persistent deployment, we also tested creating a Windows service:
 ```powershell
 # Install as a Windows service (requires NSSM - Non-Sucking Service Manager)
 # Download from http://nssm.cc/ and place in PATH
-nssm install "Claude Desktop Extension" powershell.exe -ExecutionPolicy Bypass -File "C:\Users\dimas\Desktop\Claude_Automation-main\Claude_Automation-main\start.bat"
+nssm install "Claude Desktop Extension" powershell.exe -ExecutionPolicy Bypass -File "C:\Users\dimas\Desktop\Claude_Automation\start.bat"
 nssm set "Claude Desktop Extension" DisplayName "Claude Desktop Extension"
 nssm set "Claude Desktop Extension" Description "MCP server and bridge for Claude Desktop integration"
 nssm set "Claude Desktop Extension" Start SERVICE_AUTO_START
@@ -816,7 +816,7 @@ Understanding the relationship between the different configuration files is cruc
        "mcpServers": {
          "custom-extension": {
            "command": "node",
-           "args": ["C:\\Users\\dimas\\Desktop\\Claude_Automation-main\\Claude_Automation-main\\src\\custom-claude-mcp.js"],
+           "args": ["C:\\Users\\dimas\\Desktop\\Claude_Automation\\src\\custom-claude-mcp.js"],
            "env": {},
            "disabled": false
          }
