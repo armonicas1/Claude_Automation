@@ -1,8 +1,0 @@
-{
-  "requestId": "real-claude-1751397903925",
-  "command": "/help",
-  "exitCode": 1,
-  "stdout": "",
-  "stderr": "'C:\\Users\\dimas\\Desktop\\CLAUDE' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n",
-  "timestamp": "2025-07-01T19:25:03.956Z"
-}
