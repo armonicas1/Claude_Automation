@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": "analyze-request-1751397587005",
+  "method": "tools/call",
+  "params": {
+    "name": "analyze_claude_code_cli",
+    "arguments": {
+      "analysis_type": "full",
+      "project_path": "C:\\Users\\dimas\\Desktop\\Claude_Automation-main"
+    }
+  }
+}

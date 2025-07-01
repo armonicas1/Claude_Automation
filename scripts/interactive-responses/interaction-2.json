@@ -1,0 +1,5 @@
+{
+  "userInput": "/help",
+  "claudeResponse": "📚 Claude Code Help:\nAvailable commands:\n  /status     - Show current status and configuration\n  /help       - Show this help message  \n  /exit       - Exit Claude Code CLI\n  /clear      - Clear the conversation history\n  /model      - Show current model information\n  \nYou can also ask me questions directly or request code assistance.\nExamples:\n  \"Help me debug this function\"\n  \"Write a Python script to...\"\n  \"Explain this code snippet\"",
+  "timestamp": "2025-07-01T19:28:58.253Z"
+}

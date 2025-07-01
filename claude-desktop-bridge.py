@@ -171,7 +171,7 @@ class ClaudeDesktopBridge:
         """Finds and restarts the Claude.exe process."""
         logger.info("Attempting to restart Claude Desktop...")
         found_procs: list[psutil.Process] = []
-        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):  # type: ignore[misc]
             try:
                 # Use psutil.Process methods for type safety
                 p = psutil.Process(proc.pid)
@@ -203,7 +203,7 @@ class ClaudeDesktopBridge:
         for f in PENDING_DIR.glob('*.json'):
             await self.process_action_file(f)
 
-        self.observer.schedule(self.event_handler, str(PENDING_DIR), recursive=False)
+        self.observer.schedule(self.event_handler, str(PENDING_DIR), recursive=False)  # type: ignore[misc]
         self.observer.start()
         self.update_bridge_status('running')
         logger.info("Python Bridge started. Watching for actions.")

@@ -8,7 +8,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 
-# Define type aliases for clarity
+# Define type aliases for clarity (uses Dict and Any above)
 JsonDict = Dict[str, Any]
 ActionParams = Optional[JsonDict]
 

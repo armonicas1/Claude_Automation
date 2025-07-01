@@ -42,6 +42,7 @@ echo    --- Management ---
 echo    [6] Master Control (Status Check)
 echo    [7] All Debug Windows (Launches 1-5)
 echo    [8] Validate All Scripts
+echo    [D] WSL Distribution Check (NEW!) 
 echo.
 echo    --- Auto Display ---
 echo    [9] Auto Summary Display (Manual Refresh)
@@ -66,7 +67,7 @@ if %AUTO_DISPLAY% EQU 1 (
 )
 
 REM Using SET /P instead of CHOICE to ensure the script stays open
-echo    Enter your choice (1-9, 0, or Q): 
+echo    Enter your choice (1-9, 0, D, or Q): 
 set /p user_choice=
 echo.
 
@@ -77,6 +78,7 @@ REM Process the user input
 if /i "%user_choice%"=="Q" exit /b
 if /i "%user_choice%"=="L" goto view_logs
 if /i "%user_choice%"=="I" goto change_interval
+if /i "%user_choice%"=="D" goto wsl_check
 if "%user_choice%"=="0" goto toggle_auto
 if "%user_choice%"=="9" goto auto_display
 if "%user_choice%"=="8" goto validate_scripts
@@ -409,4 +411,27 @@ goto menu
 set CHOICE_RESULT=%ERRORLEVEL%
 if %CHOICE_RESULT% EQU 1 goto menu
 if %CHOICE_RESULT% EQU 2 goto auto_display
+
+:wsl_check
+REM Log WSL check start
+powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%scripts\log-event.ps1" -Source "MONITORING_TOOLS" -Event "WSL_CHECK_START" -Data "{}"
+
+REM Clear screen and show header
+cls
+echo.
+echo    Claude Automation - WSL Distribution Check
+echo    =================================================
+echo.
+echo    This tool checks WSL distribution configuration for Claude Code integration
+echo    and helps diagnose silent failures in tool calls.
+echo.
+echo    Running WSL distribution diagnostic script...
+echo.
+
+REM Run the WSL distribution check script
+call "%SCRIPT_DIR%scripts\wsl-distribution-check.bat"
+
+REM Log completion and return to menu
+powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%scripts\log-event.ps1" -Source "MONITORING_TOOLS" -Event "WSL_CHECK_COMPLETE" -Data "{}"
+goto menu
 goto menu

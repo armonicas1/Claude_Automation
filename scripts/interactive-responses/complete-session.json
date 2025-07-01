@@ -1,0 +1,29 @@
+{
+  "sessionId": "interactive-session-1751398138251",
+  "welcomeMessage": "╭───────────────────────────────────────────────────────────╮\n│ ✻ Welcome to Claude Code!                                 │\n│                                                           │\n│   /help for help, /status for your current setup          │\n│                                                           │\n│   cwd: /mnt/c/Users/dimas/Desktop/Claude_Automation-main  │\n╰───────────────────────────────────────────────────────────╯",
+  "interactions": [
+    {
+      "userInput": "/status",
+      "claudeResponse": "📊 Claude Code Status:\n┌─────────────────────────────────────────────────────────┐\n│ Model: claude-3-5-sonnet-20241022                       │\n│ API Key: ✅ Configured                                  │\n│ Current Directory: /mnt/c/Users/dimas/Desktop/Claude_Automation-main │\n│ Session ID: sess_1751398138253                          │\n│ Uptime: 15 minutes                                       │\n└─────────────────────────────────────────────────────────┘",
+      "timestamp": "2025-07-01T19:28:58.253Z"
+    },
+    {
+      "userInput": "/help",
+      "claudeResponse": "📚 Claude Code Help:\nAvailable commands:\n  /status     - Show current status and configuration\n  /help       - Show this help message  \n  /exit       - Exit Claude Code CLI\n  /clear      - Clear the conversation history\n  /model      - Show current model information\n  \nYou can also ask me questions directly or request code assistance.\nExamples:\n  \"Help me debug this function\"\n  \"Write a Python script to...\"\n  \"Explain this code snippet\"",
+      "timestamp": "2025-07-01T19:28:58.253Z"
+    },
+    {
+      "userInput": "What is 2 + 2? Give me a brief answer.",
+      "claudeResponse": "2 + 2 = 4\n\nThis is a basic arithmetic operation where we're adding two integers together.",
+      "timestamp": "2025-07-01T19:28:58.253Z"
+    },
+    {
+      "userInput": "Can you help me write a simple JavaScript function to calculate fibonacci numbers?",
+      "claudeResponse": "Here's a simple JavaScript function to calculate Fibonacci numbers:\n\n```javascript\nfunction fibonacci(n) {\n    if (n <= 1) {\n        return n;\n    }\n    return fibonacci(n - 1) + fibonacci(n - 2);\n}\n\n// Example usage:\nconsole.log(fibonacci(5)); // Output: 5\nconsole.log(fibonacci(10)); // Output: 55\n```\n\nThis recursive implementation is straightforward but not the most efficient for large numbers. For better performance with larger inputs, you might want to use an iterative approach or memoization.\n\nWould you like me to show you an optimized version?",
+      "timestamp": "2025-07-01T19:28:58.253Z"
+    }
+  ],
+  "sessionDuration": "Simulated session",
+  "totalInteractions": 4,
+  "timestamp": "2025-07-01T19:28:58.270Z"
+}

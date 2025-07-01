@@ -42,6 +42,8 @@ This is a **Claude Desktop Extension** project that adds automation capabilities
 ✅ **MCP server responding correctly**
 ✅ **JSON parsing errors completely resolved**
 
+> For a comprehensive reference of all ports and process identifiers used in the system, see [PORTS_AND_PROCESSES.md](PORTS_AND_PROCESSES.md).
+
 ### Test Results Summary
 - **Claude Desktop**: 9 processes running successfully
 - **MCP Server**: Stdio transport active, responding correctly

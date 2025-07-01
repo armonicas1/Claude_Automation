@@ -1,0 +1,15 @@
+# Development requirements
+# Additional packages useful for development and testing
+
+-r base.txt
+
+# Development tools
+pytest>=7.0.0        # For running tests
+black>=22.6.0        # For code formatting
+flake8>=5.0.0        # For linting
+mypy>=0.971          # For type checking
+coverage>=6.4.0      # For test coverage reports
+
+# Documentation
+sphinx>=5.0.0        # For generating documentation
+sphinx-rtd-theme>=1.0.0  # Read the Docs theme for Sphinx

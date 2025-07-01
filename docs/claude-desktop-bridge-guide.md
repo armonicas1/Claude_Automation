@@ -12,12 +12,14 @@ This guide explains how to set up and use the Claude Desktop Bridge system, whic
 
 1. **Install Required Python Packages**
 
-   Open a command prompt or PowerShell window and navigate to the directory containing the `requirements.txt` file:
+   Open a command prompt or PowerShell window and navigate to the project directory:
 
    ```powershell
-   cd C:\Users\dimas\Desktop
+   cd C:\Users\dimas\Desktop\Claude_Automation-main
    pip install -r requirements.txt
    ```
+
+   For development environments or specialized installations, see the README in the `requirements/` directory.
 
 2. **Verify Claude Desktop Configuration**
 

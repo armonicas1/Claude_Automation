@@ -1,0 +1,66 @@
+{
+  "jsonrpc": "2.0",
+  "id": "analyze-request-1751397587005",
+  "result": {
+    "analysis_type": "full",
+    "timestamp": "2025-07-01T19:19:50.017Z",
+    "project_path": "C:\\Users\\dimas\\Desktop\\Claude_Automation-main",
+    "results": {
+      "installation": {
+        "status": "installed",
+        "installations_found": [
+          {
+            "path": "C:\\Users\\dimas\\Desktop\\CLAUDE CODE ToolKIT WSL Edition\\run-claude-code.bat",
+            "type": "wsl-toolkit",
+            "version": "WSL Toolkit v1.0",
+            "launchCommand": "\"C:\\Users\\dimas\\Desktop\\CLAUDE CODE ToolKIT WSL Edition\\run-claude-code.bat\""
+          }
+        ],
+        "recommendations": [
+          "Claude Code CLI is installed and available via WSL toolkit",
+          "WSL integration is working properly",
+          "All dependencies are satisfied"
+        ]
+      },
+      "configuration": {
+        "environment_variables": {
+          "ANTHROPIC_API_KEY": "set",
+          "CLAUDE_API_KEY": "set",
+          "CLAUDE_MODEL": "claude-3-5-sonnet-20241022"
+        },
+        "claude_config_files": [
+          {
+            "path": "C:\\Users\\dimas\\.claude",
+            "exists": true,
+            "valid": true
+          }
+        ]
+      },
+      "usage": {
+        "available_commands": [
+          {
+            "command": "claude chat",
+            "description": "Start interactive chat session"
+          },
+          {
+            "command": "claude edit",
+            "description": "Edit files with Claude assistance"
+          },
+          {
+            "command": "claude review",
+            "description": "Review code and get suggestions"
+          }
+        ]
+      },
+      "troubleshooting": {
+        "detected_issues": [],
+        "system_diagnostics": {
+          "node_version": "v22.14.0",
+          "platform": "win32",
+          "architecture": "x64",
+          "working_directory": "C:\\Users\\dimas\\Desktop\\Claude_Automation-main"
+        }
+      }
+    }
+  }
+}

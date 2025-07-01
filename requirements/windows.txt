@@ -1,0 +1,10 @@
+# Windows-specific requirements
+# Used only when running the Python Bridge on Windows systems
+
+-r base.txt
+
+# Windows-specific packages
+pywin32>=303; sys_platform == 'win32'  # Windows-specific functionality
+# NOTE: We use custom WSL utilities instead of wslapi (see src/utils/wsl/)
+# Direct subprocess calls to wsl.exe provide similar functionality to wslapi
+pyperclip>=1.8.2        # Cross-platform clipboard access, especially useful on Windows

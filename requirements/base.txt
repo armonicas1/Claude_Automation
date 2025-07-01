@@ -1,0 +1,17 @@
+# Base requirements for Python Bridge components
+# Common dependencies used across all environments
+
+# Core dependencies
+psutil>=5.9.0    # Used for process management across environments
+watchdog>=2.1.9  # Used for file monitoring across the WSL boundary
+
+# Cross-OS communication dependencies
+python-dotenv>=0.20.0   # For sharing environment variables between Windows/WSL
+requests>=2.28.0        # For HTTP communication when file system access isn't possible
+websocket-client>=1.3.0 # For real-time communication between environments
+
+# File system and encoding dependencies
+chardet>=5.0.0          # For detecting file encodings between systems
+jsonschema>=4.16.0      # For JSON validation across different environments
+pyyaml>=6.0             # For configuration files that work across systems
+colorama>=0.4.5         # For consistent terminal colors across Windows/Linux

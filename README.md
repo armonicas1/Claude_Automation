@@ -1,10 +1,10 @@
 # Claude Desktop Extension
 
-Add automation capabilities to Claude Desktop through the Model Context Protocol (MCP) and use Claude Desktop as a model gateway for Claude Code.
+Add automation capabilities to Claude Desktop through the Model Context Protocol (MCP) and use Claude Desktop as a model gateway for Claude Code, solving the fundamental WSL-Windows integration challenge.
 
 ## Project Overview
 
-This is a **Claude Desktop Extension** project that adds automation capabilities to Claude Desktop through the Model Context Protocol (MCP) and enables using Claude Desktop as a model gateway for Claude Code. Core communication between services is operational with documented fixes for ESM loading, JSON validation, and file monitoring issues.
+This is a **Claude Desktop Extension** project that addresses the complex challenge of enabling seamless communication between Claude Desktop (running natively on Windows) and Claude Code (running in WSL Linux environment). It adds automation capabilities to Claude Desktop through the Model Context Protocol (MCP) and enables using Claude Desktop as a model gateway for Claude Code, with core communication between these different environments operational across the WSL-Windows boundary. The project includes documented fixes for ESM loading, JSON validation, path translation, and file monitoring issues that arise when bridging these two different execution environments.
 
 ## Key Purposes
 
@@ -47,24 +47,36 @@ Windows Claude Desktop ←→ Shared Files ←→ WSL Claude Code
 
 ## Core Architecture
 
+### Cross-Environment Integration System
+
+```
+Windows Environment                     |   WSL (Linux) Environment
+---------------------------------       |   ---------------------------
+Claude Desktop (native app)             |   Claude Code (CLI)
+↓                                       |   ↑  
+MCP Server (Node.js)                    |   ↑
+↓                                       |   ↑
+Bridge Process (JS or Python) ←→ Shared Files/Directories ←→ WSL Integration
+```
+
+This architecture is specifically designed to handle the challenges of cross-environment communication, where two fundamentally different operating systems need to work together on the same physical machine:
+
+- **File-based Communication**: Uses shared mount points (`/mnt/c/Users/...`) accessible from both environments
+- **Path Translation**: Converts between Windows paths (`C:\path`) and WSL paths (`/mnt/c/path`)
+- **Process Isolation**: Manages processes that exist in separate kernel spaces
+- **Authentication Sharing**: Syncs tokens between the two environments
+
 ### Two-Tier System
 
 **Basic Extension Tier:**
-- MCP Server (`custom-claude-mcp.js`) - Provides tools to Claude Desktop
-- Bridge Process (`claude-desktop-bridge.js`) - Monitors and executes actions
+- MCP Server (`custom-claude-mcp.js` or `custom-claude-mcp-stdio.js`) - Provides tools to Claude Desktop
+- Bridge Process (`claude-desktop-bridge.js` or `claude-desktop-bridge.py`) - Monitors and executes actions
 - Plugin System - Extensible tool framework
 
 **Model Gateway Tier:**
 - Dev Hub MCP Server (`dev-hub-mcp-server.js`) - Routes Claude Code requests
 - Desktop Gateway (`claude-desktop-gateway.js`) - Interfaces with Claude Desktop
 - Session Manager (`session-manager.js`) - Handles authentication across apps
-
-### Communication Patterns
-
-- **WebSocket**: MCP protocol communication (original implementation)
-- **Stdio**: Direct stdin/stdout communication for Claude Desktop (recommended)
-- **File-based**: Shared directory communication between services (verified working)
-- **Session tokens**: Secure cross-application authentication
 
 ## Table of Contents
 - [Installation](#installation)
@@ -258,12 +270,20 @@ config/
 ├── claude-config.json            # Extension configuration
 └── dev-hub-config.json          # Model gateway configuration
 
+requirements/
+├── base.txt                      # Common dependencies for all environments
+├── windows.txt                   # Windows-specific dependencies
+├── wsl.txt                       # WSL-specific dependencies
+├── dev.txt                       # Development dependencies
+├── api.txt                       # Optional API integration dependencies
+└── README.md                     # Dependency management guide
+
 docs/
 ├── ARCHITECTURE.md               # Architecture details
 ├── GATEWAY_ARCHITECTURE.md       # Gateway architecture details
 ├── claude-desktop-bridge-guide.md # Bridge usage guide
 ├── claude-desktop-extension-schema.md # Extension schema
-└── requirements.txt              # Python requirements
+└── requirements.txt              # Python requirements (legacy location)
 ```
 
 ## Available Tools (All Verified Working)
@@ -890,6 +910,8 @@ The project includes comprehensive documentation in the `docs/` directory:
 - **CUSTOM_MCP_IMPLEMENTATION.md**: MCP protocol details
 - **PLUGINS_ARCHITECTURE.md**: Plugin system documentation
 - **IMPLEMENTATION_ISSUES_AND_FIXES.md**: Chronological issue log
+- **PORTS_AND_PROCESSES.md**: Comprehensive reference for ports and process IDs
+- **WSL_UTILITIES.md**: Custom WSL interaction without external dependencies
 - **CHANGELOG.md**: Version history
 - **SECURITY_AUDIT_CHECKLIST.md**: Security considerations
 
@@ -928,3 +950,67 @@ The most recent improvements to the codebase include:
 6. **WSL distribution detection**: Enhanced WSL Ubuntu detection to support various naming formats.
 
 A complete changelog is available in the `docs/CHANGELOG.md` file.
+
+## WSL-Windows Integration: Python Bridge Components
+
+This project includes Python scripts that are critical for solving the fundamental WSL-Windows boundary communication challenge.
+
+### Understanding the Python Scripts
+
+The Python components (`claude-desktop-bridge.py` and related files) are essential infrastructure for specific use cases:
+
+1. **Cross-Boundary Communication**: Python's robust file handling capabilities make it ideal for reliable communication between Windows and WSL environments
+2. **Process Management**: The `psutil` library provides powerful cross-platform process control that works consistently in both environments
+3. **File System Monitoring**: Python's `watchdog` library offers reliable file system event monitoring across the boundary
+4. **Path Translation**: The Python bridge handles the complex path differences between Windows (`C:\path\to\file`) and WSL (`/mnt/c/path/to/file`)
+5. **Custom WSL Utilities**: Our custom `src/utils/wsl` module provides WSL interaction without external dependencies
+
+### Setting Up the Python Environment
+
+The Python scripts require specific dependencies listed in the `requirements/` directory. To set up the environment:
+
+```bash
+# Install Python 3.9+ if not already installed
+
+# Install dependencies
+pip install -r requirements.txt
+
+# For Windows-specific functionality
+# This is automatically included when using requirements.txt
+```
+
+### When to Use the Python Bridge vs. JavaScript Bridge
+
+While the system has evolved to primarily use the JavaScript bridge (`claude-desktop-bridge.js`), the Python bridge (`claude-desktop-bridge.py`) remains important for certain scenarios:
+
+- **WSL Integration**: When working with WSL environments where path translation is critical
+- **Process Management**: When robust process control across environments is needed
+- **Legacy Support**: For compatibility with older configurations
+- **Fallback Mechanism**: As a reliable alternative if issues occur with the JavaScript implementation
+
+### Running the Python Bridge
+
+To manually run the Python bridge:
+
+```powershell
+# From the project root
+python claude-desktop-bridge.py
+```
+
+The Python bridge will:
+1. Create necessary directories in `%APPDATA%\Claude\python-bridge\`
+2. Set up file watchers for the `pending` directory
+3. Process action files and move them to `completed` or `failed` directories
+4. Update Claude Desktop configuration as needed
+
+> **Note**: The PowerShell script `start-claude-admin-with-monitoring.ps1` no longer directly launches the Python script, instead using the JavaScript bridge. The Python components are maintained for specific integration scenarios and as fallback mechanisms.
+
+### Communication Patterns
+
+The system uses multiple communication methods to bridge the Windows-WSL boundary:
+
+- **WebSocket**: MCP protocol communication (original implementation, same-environment only)
+- **Stdio**: Direct stdin/stdout communication for Claude Desktop (recommended for reliability)
+- **File-based**: Shared directory communication between Windows and WSL environments (critical for cross-boundary)
+- **Session tokens**: Secure cross-application authentication with file-based sharing
+- **Environment variables**: Synchronized between environments via the bridge

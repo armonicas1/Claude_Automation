@@ -1,0 +1,29 @@
+{
+  "requestId": "real-claude-code_review-1751397678668",
+  "command": "code_review",
+  "file": "C:\\Users\\dimas\\Desktop\\Claude_Automation-main\\scripts\\claude-test-files\\math-utils.js",
+  "analysis": {
+    "overall_rating": "Good",
+    "suggestions": [
+      "Consider memoization for the fibonacci function to improve performance",
+      "Add JSDoc comments for better documentation",
+      "Consider error handling for invalid inputs",
+      "The isPrime function is well-implemented but could benefit from early return optimization"
+    ],
+    "strengths": [
+      "Clean, readable code structure",
+      "Good use of static methods",
+      "Proper mathematical logic implementation"
+    ],
+    "issues": [
+      {
+        "severity": "medium",
+        "line": 3,
+        "issue": "Recursive fibonacci has exponential time complexity",
+        "suggestion": "Implement iterative version or memoization"
+      }
+    ]
+  },
+  "timestamp": "2025-07-01T19:21:20.174Z",
+  "processingTime": "1.5s"
+}

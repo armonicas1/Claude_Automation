@@ -160,6 +160,7 @@ function Start-ClaudeDesktopWithMonitoring {
 
     # 5. Sync WSL authentication before starting services
     Write-Host "Syncing WSL Claude Code authentication..." -ForegroundColor Yellow
+    # Note: Using JavaScript version for compatibility. Python version available but has Python 3.8 type issues
     $authSyncScript = Join-Path $PSScriptRoot "scripts\sync-wsl-auth.js"
     if (Test-Path $authSyncScript) {
         try {

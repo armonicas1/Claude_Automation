@@ -1,0 +1,8 @@
+{
+  "requestId": "real-claude-1751397910006",
+  "command": "What is 2+2? Please give a brief answer.",
+  "exitCode": 1,
+  "stdout": "",
+  "stderr": "'C:\\Users\\dimas\\Desktop\\CLAUDE' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n",
+  "timestamp": "2025-07-01T19:25:10.029Z"
+}

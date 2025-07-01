@@ -1,0 +1,7 @@
+# WSL-specific requirements
+# Used when running components in the Windows Subsystem for Linux
+
+-r base.txt
+
+# Linux-specific packages (if any)
+pyperclip>=1.8.2  # Cross-platform clipboard access within WSL

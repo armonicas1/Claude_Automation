@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": "claude-interaction-1751398138284-0",
+  "method": "tools/call",
+  "params": {
+    "name": "claude_code_cli",
+    "arguments": {
+      "command": "/status",
+      "session_id": "interactive-session-1751398138251",
+      "timestamp": "2025-07-01T19:28:58.253Z"
+    }
+  }
+}

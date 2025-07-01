@@ -1,0 +1,18 @@
+# Optional API integration requirements
+# Used for direct API integration scenarios
+
+-r base.txt
+
+# API clients
+anthropic>=0.2.0     # For Claude API integration
+# openai>=0.27.0     # For OpenAI API integration (if needed)
+# boto3>=1.26.0      # For AWS integration (if needed)
+
+# WSL integration 
+# Custom implementation used instead of wslapi for Python 3.8.10 compatibility
+# See src/utils/wsl for implementation details
+# wslapi>=0.1.1; sys_platform == 'win32'  # Incompatible with Python 3.8.10
+
+# Required for WSL integration:
+# subprocess - Standard library (used for process execution)
+# re - Standard library (for robust parsing of WSL distribution output)

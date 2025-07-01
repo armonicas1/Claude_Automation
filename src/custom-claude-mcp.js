@@ -15,18 +15,30 @@ function detectAndSetWslAuth() {
     return;
   }
 
-  // Try multiple paths based on platform
+  // Try multiple WSL distribution paths for better compatibility
+  const distributions = ['Ubuntu-24.04', 'Ubuntu-22.04', 'Ubuntu', 'docker-desktop'];
+  const username = os.userInfo().username;
   const wslCredentialsPaths = [
-    '/home/dimas/.claude/.credentials.json',  // Direct WSL path (if running in WSL)
-    'C:\\Users\\dimas\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc\\LocalState\\rootfs\\home\\dimas\\.claude\\.credentials.json',  // Windows to WSL path
-    '\\\\wsl$\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json',  // WSL network path
-    '\\\\wsl.localhost\\Ubuntu-24.04\\home\\dimas\\.claude\\.credentials.json'  // Alternative WSL network path
+    `/home/${username}/.claude/.credentials.json`,  // Direct WSL path (if running in WSL)
   ];
+  
+  // Add Windows->WSL paths for all potential distributions
+  for (const dist of distributions) {
+    // Add package path format (for Ubuntu from Windows Store)
+    wslCredentialsPaths.push(
+      `C:\\Users\\${username}\\AppData\\Local\\Packages\\CanonicalGroupLimited.${dist}_79rhkp1fndgsc\\LocalState\\rootfs\\home\\${username}\\.claude\\.credentials.json`
+    );
+    
+    // Add WSL network paths
+    wslCredentialsPaths.push(`\\\\wsl$\\${dist}\\home\\${username}\\.claude\\.credentials.json`);
+    wslCredentialsPaths.push(`\\\\wsl.localhost\\${dist}\\home\\${username}\\.claude\\.credentials.json`);
+  }
   
   try {
     for (const credentialsPath of wslCredentialsPaths) {
       if (fs.existsSync(credentialsPath)) {
         const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        console.log(`Found credentials in: ${credentialsPath}`);
         
         if (credentials.claudeAiOauth && credentials.claudeAiOauth.accessToken) {
           process.env.ANTHROPIC_API_KEY = credentials.claudeAiOauth.accessToken;

@@ -1,0 +1,16 @@
+# Main requirements file for Python Bridge components
+# This is a convenience file that installs base and OS-specific dependencies
+# For specialized environments, use the files in the requirements/ directory directly
+
+# Choose the appropriate environment:
+-r requirements/base.txt
+
+# Conditional imports based on platform
+# These will be installed only on the appropriate platforms
+pywin32>=303; sys_platform == 'win32'  # Windows-specific functionality
+# NOTE: We use custom WSL utilities instead of wslapi (see src/utils/wsl/)
+pyperclip>=1.8.2        # Cross-platform clipboard access
+
+# Optional API integration
+# Uncomment if needed:
+# -r requirements/api.txt

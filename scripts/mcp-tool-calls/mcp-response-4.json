@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "claude-interaction-1751398138284-3",
+  "result": {
+    "command": "Can you help me write a simple JavaScript function to calculate fibonacci numbers?",
+    "response": "Here's a simple JavaScript function to calculate Fibonacci numbers:\n\n```javascript\nfunction fibonacci(n) {\n    if (n <= 1) {\n        return n;\n    }\n    return fibonacci(n - 1) + fibonacci(n - 2);\n}\n\n// Example usage:\nconsole.log(fibonacci(5)); // Output: 5\nconsole.log(fibonacci(10)); // Output: 55\n```\n\nThis recursive implementation is straightforward but not the most efficient for large numbers. For better performance with larger inputs, you might want to use an iterative approach or memoization.\n\nWould you like me to show you an optimized version?",
+    "session_id": "interactive-session-1751398138251",
+    "timestamp": "2025-07-01T19:28:58.253Z",
+    "status": "success"
+  }
+}
