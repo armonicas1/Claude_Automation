@@ -86,6 +86,7 @@ Windows Claude Desktop ←→ Shared Files ←→ WSL Claude Code
 - [Integration Benefits](#integration-benefits-verified)
 - [Testing and Verification Results](#testing-and-verification-results)
 - [Current Status](#current-status)
+- [Monitoring and Debugging Suite](#monitoring-and-debugging-suite)
 - [Troubleshooting](#troubleshooting)
 - [Useful Commands for Development and Troubleshooting](#useful-commands-for-development-and-troubleshooting)
 - [MCP Architecture and Configuration Insights](#mcp-architecture-and-configuration-insights)
@@ -544,6 +545,80 @@ Claude Desktop ←→ MCP Server ←→ Bridge Process ←→ File System ←→
 ✅ **Claude Code WSL launch working**
 ✅ **Complete documentation available**
 ✅ **Ready for production use**
+
+## Monitoring and Debugging Suite
+
+This project includes a comprehensive suite of monitoring and debugging tools designed to provide complete, end-to-end visibility into the system. It is managed via a user-friendly batch file launcher, making it accessible regardless of your PowerShell experience.
+
+### Quick Start: The First Step for Troubleshooting
+
+If you are experiencing any issues, especially silent tool call failures, start here.
+
+1.  Navigate to the project's root directory in your terminal.
+2.  Run the main launcher:
+    ```
+    .\monitoring-tools.bat
+    ```
+3.  This will open a simple menu. **Choose option `[1] Live Tool Call Debugger`**.
+4.  With the live debugger running, perform the action in Claude Desktop that is failing.
+5.  Watch the debugger dashboard for a real-time, conclusive breakdown of the request and the resulting success or failure.
+
+### Diagnostic Workflow
+
+For any problem, follow these simple steps:
+
+1.  **Run `monitoring-tools.bat` → Choose Option `[6]` (Validate All Scripts).** This ensures no scripts are broken.
+2.  **Run `monitoring-tools.bat` → Choose Option `[1]` (Live Tool Call Debugger).** This is your main window into the system.
+3.  **Perform an action in Claude Desktop** that uses a tool.
+4.  **Check the live debugger** for the exact failure point: the JSON request, the response, the error message, and the status of the underlying processes.
+
+### Visualizing the Monitoring Coverage
+
+Our tools provide visibility at every critical step of the communication flow:
+
+```
+[Claude Desktop] -> [MCP Server] -> [Bridge Process] -> [WSL Claude Code]
+      ▲                 ▲                  ▲                  ▲
+      |                 |                  |                  |
+(tool-call-      (Port & Process)    (File Activity)   (WSL Process)
+ debugger)        (system-monitor)    (bridge-monitor)  (system-monitor)
+```
+
+### Components of the Monitoring Suite
+
+The system is comprised of several key components, all accessible from the main launcher:
+
+1.  **`monitoring-tools.bat` (Main Launcher):**
+    *   A simple, robust menu for launching all monitoring and utility scripts.
+    *   Automatically handles PowerShell `ExecutionPolicy` so scripts run without hassle.
+    *   Launches each monitor in a separate, descriptively-titled console window for easy management.
+
+2.  **`scripts/tool-call-debugger.ps1` (Live Tool Debugger):**
+    *   **Purpose:** The **primary tool for debugging silent tool call failures**.
+    *   **Features:** Provides a full-screen, real-time dashboard showing:
+        *   Live health status of critical processes (MCP, Bridge) and ports.
+        *   A conclusive, step-by-step analysis of the most recent tool call, including the exact **JSON request** and the final **JSON response or error**.
+        *   A live, color-coded log of events parsed directly from the MCP server.
+
+3.  **`scripts/claude-system-monitor.ps1` (System-Wide Monitor):**
+    *   **Purpose:** Provides a high-level, "10,000-foot view" of the entire system's health.
+    *   **Features:** A stable, continuously updating dashboard that monitors:
+        *   All related processes (Claude Desktop, Node.js).
+        *   Key network ports (4323, 4322, 4324).
+        *   File system status (config files, bridge directories).
+        *   WSL and Claude Code process status.
+
+4.  **`scripts/bridge-monitor.ps1` (Bridge Communication Monitor):**
+    *   **Purpose:** A specialized tool to watch the file-based communication layer between the Windows host and the WSL environment.
+    *   **Features:** Tracks file creation and modification in the `claude-bridge` and related directories, showing recent activity to diagnose communication stalls.
+
+5.  **`scripts/validate-scripts.ps1` (Syntax Validator):**
+    *   **Purpose:** A utility to guarantee that all PowerShell scripts are free of syntax errors.
+    *   **Features:** Uses the official PowerShell language parser to accurately check every script, providing immediate feedback if a script is broken.
+
+6.  **`claude-master-control.ps1` (Master Controller):**
+    *   **Purpose:** The underlying engine for starting, stopping, and managing the lifecycle of all services.
+    *   **Features:** Provides `start`, `stop`, and `debug` actions to manage the entire environment.
 
 ## Troubleshooting
 
