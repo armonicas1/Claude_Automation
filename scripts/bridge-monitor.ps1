@@ -12,6 +12,36 @@ param(
 $bridgeDir = "$env:USERPROFILE\claude-bridge"
 $claudeDir = "$env:APPDATA\Claude"
 
+# Import the Node.js logger if available
+function Log-ToUnified {
+    param (
+        [string]$Source = "BRIDGE_MONITOR",
+        [string]$Event,
+        [string]$Message,
+        [hashtable]$Data = @{
+        }
+    )
+    
+    $logDir = Join-Path $PSScriptRoot "..\logs"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+    
+    $unifiedLog = Join-Path $logDir "unified-monitoring.log"
+    
+    $timestamp = Get-Date -Format "o"
+    $logEntry = @{
+        timestamp = $timestamp
+        source = $Source
+        event = $Event
+        message = $Message
+        data = $Data
+    } | ConvertTo-Json -Compress
+    
+    $formattedEntry = "[$timestamp] [$Source] [$Event] $logEntry"
+    Add-Content -Path $unifiedLog -Value $formattedEntry
+}
+
 function Write-BridgeLog {
     param($Message, $Level = 'INFO')
     $timestamp = Get-Date -Format "HH:mm:ss.fff"
@@ -107,6 +137,53 @@ function Get-BridgeStatus {
     }
     
     return $status
+}
+
+function Get-BridgeInfo {
+    $bridgeDir = Join-Path $env:APPDATA 'Claude\python-bridge'
+    
+    $pendingCount = (Get-ChildItem $bridgeDir\pending -ErrorAction SilentlyContinue).Count
+    $completedCount = (Get-ChildItem $bridgeDir\completed -ErrorAction SilentlyContinue).Count
+    $failedCount = (Get-ChildItem $bridgeDir\failed -ErrorAction SilentlyContinue).Count
+    
+    # Get the most recent files in each directory
+    $pendingFiles = Get-ChildItem $bridgeDir\pending -ErrorAction SilentlyContinue | 
+        Sort-Object LastWriteTime -Descending | 
+        Select-Object -First 3 | 
+        ForEach-Object { @{name = $_.Name; modified = $_.LastWriteTime} }
+    
+    $completedFiles = Get-ChildItem $bridgeDir\completed -ErrorAction SilentlyContinue | 
+        Sort-Object LastWriteTime -Descending | 
+        Select-Object -First 3 |
+        ForEach-Object { @{name = $_.Name; modified = $_.LastWriteTime} }
+    
+    $failedFiles = Get-ChildItem $bridgeDir\failed -ErrorAction SilentlyContinue | 
+        Sort-Object LastWriteTime -Descending | 
+        Select-Object -First 3 |
+        ForEach-Object { @{name = $_.Name; modified = $_.LastWriteTime} }
+    
+    # Get recent log entries
+    $bridgeLog = Join-Path $PSScriptRoot '..\logs\bridge.log'
+    $recentLogEntries = if (Test-Path $bridgeLog) {
+        Get-Content $bridgeLog -Tail 5
+    } else {
+        @("Bridge log not found")
+    }
+    
+    return @{
+        timestamp = Get-Date -Format "o"
+        counts = @{
+            pending = $pendingCount
+            completed = $completedCount
+            failed = $failedCount
+        }
+        recent_files = @{
+            pending = $pendingFiles
+            completed = $completedFiles
+            failed = $failedFiles
+        }
+        recent_logs = $recentLogEntries
+    }
 }
 
 function Show-BridgeMonitor {
@@ -315,6 +392,11 @@ try {
     if ($Continuous) {
         while ($true) {
             Show-BridgeMonitor
+            
+            $bridgeInfo = Get-BridgeInfo
+            
+            # Log to unified log
+            Log-ToUnified -Event "PERIODIC_UPDATE" -Message "Bridge status update" -Data $bridgeInfo
         }
     } else {
         Show-BridgeMonitor

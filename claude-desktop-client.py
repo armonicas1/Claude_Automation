@@ -1,188 +1,164 @@
-# claude-desktop-client.py
+# claude-desktop-client-v4.py
 import os
-import sys
 import json
 import asyncio
 import time
+import uuid
+import argparse
 from pathlib import Path
+from typing import Dict, Any, Tuple, Optional
+
+# Define type aliases for clarity
+JsonDict = Dict[str, Any]
+ActionParams = Optional[JsonDict]
 
 class ClaudeDesktopClient:
-    def __init__(self):
-        # Use the actual Claude directory structure
-        self.claude_dir = Path(os.path.expanduser('~')) / 'AppData' / 'Roaming' / 'Claude'
-        self.pending_actions_file = self.claude_dir / 'pending_actions.json'
-        self.bridge_status_file = self.claude_dir / 'bridge_status.json'
+    def __init__(self) -> None:
+        # Use environment variables for portability and type safety
+        appdata_dir_str = os.getenv('APPDATA')
+        if not appdata_dir_str:
+            raise EnvironmentError("APPDATA environment variable not set. This script is intended for Windows.")
         
-        # Ensure the files exist
-        if not self.pending_actions_file.exists():
-            with open(self.pending_actions_file, 'w') as f:
-                json.dump({"actions": []}, f)
-    
-    def check_bridge_status(self):
-        """Check if the bridge is running"""
-        try:
-            if self.bridge_status_file.exists():
-                with open(self.bridge_status_file, 'r') as f:
-                    status = json.load(f)
-                
-                # Check if the bridge has updated its status recently (within 30 seconds)
-                if time.time() - status.get('timestamp', 0) < 30:
-                    return True, status
-            
-            return False, {"status": "unknown"}
-        except Exception as e:
-            print(f"Error checking bridge status: {e}")
-            return False, {"status": "error", "message": str(e)}
-    
-    async def add_pending_action(self, action_type, params=None):
-        """Add an action to the pending actions queue"""
-        try:
-            # First check if bridge is running
-            bridge_running, status = self.check_bridge_status()
-            if not bridge_running:
-                print("Warning: Claude Desktop Bridge does not appear to be running.")
-                print("Actions may not be processed until the bridge is started.")
-            
-            # Create the action
-            action = {
-                "action": action_type,
-                "params": params or {},
-                "timestamp": time.time(),
-                "status": "pending",
-                "client": "claude-desktop-client"
-            }
-            
-            # Load existing actions
-            with open(self.pending_actions_file, 'r') as f:
-                data = json.load(f)
-            
-            # Add the new action
-            data['actions'].append(action)
-            
-            # Save the updated actions
-            with open(self.pending_actions_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            
-            print(f"Action '{action_type}' added to pending actions queue")
-            
-            # If the bridge is running, we can wait a moment to see if it processes the action
-            if bridge_running:
-                print("Waiting for bridge to process the action...")
-                await asyncio.sleep(2)
-                
-                # Check if the action was processed
-                with open(self.pending_actions_file, 'r') as f:
-                    updated_data = json.load(f)
-                
-                # Find our action by timestamp
-                for updated_action in updated_data['actions']:
-                    if (updated_action.get('timestamp') == action['timestamp'] and 
-                        updated_action.get('action') == action['action']):
-                        if updated_action.get('status') != 'pending':
-                            print(f"Action processed with status: {updated_action.get('status')}")
-                        else:
-                            print("Action is still pending.")
-                        break
-            
-            return True
-        except Exception as e:
-            print(f"Error adding action: {e}")
-            return False
-    
-    async def add_mcp_server(self, name, config, auto_start=False):
-        """Add an MCP server configuration"""
-        params = {
-            "name": name,
-            "config": config,
-            "autoStart": auto_start
-        }
-        return await self.add_pending_action("add_mcp_server", params)
-    
-    async def remove_mcp_server(self, name):
-        """Remove an MCP server configuration"""
-        params = {
-            "name": name
-        }
-        return await self.add_pending_action("remove_mcp_server", params)
-    
-    async def switch_model(self, model_name):
-        """Switch the default model"""
-        params = {
-            "model": model_name
-        }
-        return await self.add_pending_action("switch_model", params)
-    
-    async def reload_config(self):
-        """Request config reload"""
-        return await self.add_pending_action("reload_config")
-    
-    async def restart_claude(self):
-        """Request Claude Desktop restart"""
-        return await self.add_pending_action("restart_claude")
-    
-    def print_usage(self):
-        """Print usage instructions"""
-        print("Claude Desktop Client Usage:")
-        print("  add-server <name> <port> <host> [auto]  - Add new MCP server")
-        print("  remove-server <name>                   - Remove MCP server")
-        print("  switch-model <model_name>              - Switch default model")
-        print("  reload                                - Reload configuration")
-        print("  restart                               - Restart Claude Desktop")
-        print("  status                                - Check bridge status")
-        print("")
-        print("Examples:")
-        print("  python claude-desktop-client.py add-server my-server 4322 localhost auto")
-        print("  python claude-desktop-client.py remove-server my-server")
-        print("  python claude-desktop-client.py reload")
+        self.claude_dir: Path = Path(appdata_dir_str) / 'Claude'
+        self.bridge_dir: Path = self.claude_dir / 'python-bridge'
+        self.pending_dir: Path = self.bridge_dir / 'pending'
+        self.completed_dir: Path = self.bridge_dir / 'completed'
+        self.failed_dir: Path = self.bridge_dir / 'failed'
+        self.bridge_status_file: Path = self.bridge_dir / 'bridge_status.json'
+        
+        # Ensure directories exist
+        for dir_path in [self.bridge_dir, self.pending_dir, self.completed_dir, self.failed_dir]:
+            dir_path.mkdir(parents=True, exist_ok=True)
 
-# Main entry point
-async def main():
+    def check_bridge_status(self) -> Tuple[bool, str]:
+        """Check if the bridge is running and responsive."""
+        if not self.bridge_status_file.exists():
+            return False, "Bridge status file not found."
+        
+        try:
+            with open(self.bridge_status_file, 'r') as f:
+                status: JsonDict = json.load(f)
+            
+            last_heartbeat: float = status.get('timestamp', 0)
+            if time.time() - last_heartbeat > 15: # 15-second tolerance
+                return False, f"Bridge not responsive. Last heartbeat was {int(time.time() - last_heartbeat)}s ago."
+
+            return True, f"Bridge is {status.get('status', 'unknown')} (PID: {status.get('pid')})."
+        except (json.JSONDecodeError, IOError) as e:
+            return False, f"Error reading bridge status: {e}"
+
+    async def send_action(self, action_type: str, params: ActionParams = None) -> Optional[JsonDict]:
+        """Sends an action by creating a new file in the pending directory."""
+        action_id = str(uuid.uuid4())
+        action_payload: JsonDict = {
+            "id": action_id,
+            "action": action_type,
+            "params": params or {},
+            "timestamp": time.time(),
+            "status": "pending",
+            "client": "claude-desktop-client-v4"
+        }
+        
+        action_file = self.pending_dir / f"{action_id}.json"
+
+        try:
+            with open(action_file, 'w') as f:
+                json.dump(action_payload, f, indent=2)
+            
+            print(f"✅ Action '{action_type}' (ID: {action_id[:8]}) submitted.")
+            
+            # Wait for conclusive feedback from the bridge
+            return await self.wait_for_completion(action_id)
+            
+        except IOError as e:
+            print(f"❌ Error submitting action: {e}")
+            return None
+
+    async def wait_for_completion(self, action_id: str, timeout: int = 10) -> Optional[JsonDict]:
+        """Waits for an action file to be moved to completed or failed."""
+        start_time = time.time()
+        completed_file = self.completed_dir / f"{action_id}.json"
+        failed_file = self.failed_dir / f"{action_id}.json"
+
+        print("... waiting for bridge to process...")
+        while time.time() - start_time < timeout:
+            if completed_file.exists():
+                try:
+                    with open(completed_file, 'r') as f:
+                        result: JsonDict = json.load(f)
+                    print(f"✔️  SUCCESS: {result.get('result', 'Action completed.')}")
+                    return result
+                except (IOError, json.JSONDecodeError) as e:
+                    print(f"❌ Error reading result file: {e}")
+                    return None
+            
+            if failed_file.exists():
+                try:
+                    with open(failed_file, 'r') as f:
+                        result = json.load(f)
+                    print(f"❌ FAILED: {result.get('error', 'Action failed.')}")
+                    return result
+                except (IOError, json.JSONDecodeError) as e:
+                    print(f"❌ Error reading failure file: {e}")
+                    return None
+
+            await asyncio.sleep(0.5)
+        
+        print("⌛️ TIMEOUT: Bridge did not process the action within the timeout period.")
+        return None
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="A command-line client to interact with the Claude Desktop Bridge.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Status command
+    subparsers.add_parser("status", help="Check the status of the bridge daemon.")
+
+    # Restart command
+    subparsers.add_parser("restart", help="Request the bridge to restart the Claude Desktop application.")
+
+    # Add-server command
+    add_parser = subparsers.add_parser("add-server", help="Add or update an MCP server configuration.")
+    add_parser.add_argument("name", help="A unique name for the server (e.g., 'my-custom-tools').")
+    add_parser.add_argument("command", help="The command to execute (e.g., 'node').")
+    add_parser.add_argument("script_path", help="The full path to the MCP server script.")
+
+    # Remove-server command
+    remove_parser = subparsers.add_parser("remove-server", help="Remove an MCP server configuration.")
+    remove_parser.add_argument("name", help="The name of the server to remove.")
+
+    args = parser.parse_args()
     client = ClaudeDesktopClient()
     
-    if len(sys.argv) < 2:
-        client.print_usage()
+    if args.command == "status":
+        is_running, message = client.check_bridge_status()
+        color_code = "\033[92m" if is_running else "\033[91m"
+        print(f"{color_code}{message}\033[0m")
         return
+
+    # Check bridge status for all action commands
+    is_running, message = client.check_bridge_status()
+    if not is_running:
+        print(f"\033[91mWarning: {message}\033[0m")
+        if input("Continue anyway? (y/n): ").lower() != 'y':
+            return
     
-    command = sys.argv[1]
+    if args.command == "restart":
+        asyncio.run(client.send_action("restart_claude"))
     
-    if command == "add-server" and len(sys.argv) >= 4:
-        name = sys.argv[2]
-        port = int(sys.argv[3])
-        host = sys.argv[4] if len(sys.argv) > 4 else "localhost"
-        auto_start = len(sys.argv) > 5 and sys.argv[5] == "auto"
-        
-        config = {
-            "external": True,
-            "port": port,
-            "host": host
+    elif args.command == "add-server":
+        config: JsonDict = {
+            "command": args.command,
+            "args": [args.script_path],
+            "env": {},
+            "disabled": False
         }
-        
-        await client.add_mcp_server(name, config, auto_start)
-    
-    elif command == "remove-server" and len(sys.argv) >= 3:
-        name = sys.argv[2]
-        await client.remove_mcp_server(name)
-    
-    elif command == "switch-model" and len(sys.argv) >= 3:
-        model = sys.argv[2]
-        await client.switch_model(model)
-    
-    elif command == "reload":
-        await client.reload_config()
-    
-    elif command == "restart":
-        await client.restart_claude()
-    
-    elif command == "status":
-        running, status = client.check_bridge_status()
-        if running:
-            print(f"Bridge is running. Status: {status['status']}")
-            print(f"Last updated: {time.ctime(status['timestamp'])}")
-        else:
-            print("Bridge is not running or not responding.")
-    
-    else:
-        client.print_usage()
+        params: JsonDict = {"name": args.name, "config": config}
+        asyncio.run(client.send_action("add_mcp_server", params))
+
+    elif args.command == "remove-server":
+        params = {"name": args.name}
+        asyncio.run(client.send_action("remove_mcp_server", params))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

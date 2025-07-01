@@ -7,6 +7,11 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { exec } from 'child_process';
 import chokidar from 'chokidar';
+import { createRequire } from 'module';
+
+// Create require function for ES modules
+const require = createRequire(import.meta.url);
+const { logEvent, logBridgeActivity } = require('./utils/logger.js');
 
 // Calculate absolute paths
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -18,18 +23,22 @@ if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
 }
 
-// Setup logging
+// Setup legacy logging for backward compatibility
 const logFile = fs.createWriteStream(path.join(LOG_DIR, 'desktop-gateway.log'), { flags: 'a' });
 const logger = {
   info: (message) => {
     const logEntry = `[${new Date().toISOString()}] INFO: ${message}`;
     console.log(logEntry);
     logFile.write(logEntry + '\n');
+    // Also log to unified log
+    logEvent('DESKTOP_GATEWAY', 'INFO', { message });
   },
   error: (message) => {
     const logEntry = `[${new Date().toISOString()}] ERROR: ${message}`;
     console.error(logEntry);
     logFile.write(logEntry + '\n');
+    // Also log to unified log
+    logEvent('DESKTOP_GATEWAY', 'ERROR', { message });
   }
 };
 
@@ -210,6 +219,9 @@ async function processRequest(requestFile) {
     const requestData = JSON.parse(fs.readFileSync(requestFile, 'utf8'));
     const { id, request, status } = requestData;
     
+    // Log to unified log
+    logBridgeActivity('REQUEST', requestFile, requestData);
+    
     // Skip if already processed
     if (status !== "pending") {
       logger.info(`Request ${id} is already ${status}, skipping`);
@@ -349,12 +361,17 @@ async function processRequest(requestFile) {
     
     // Write the response to the responses directory
     const responseFile = path.join(responsesDir, `${id}.json`);
-    fs.writeFileSync(responseFile, JSON.stringify({
+    const responseData = {
       id: id,
       response: simulatedResponse,
       status: "completed",
       completed_at: Date.now()
-    }, null, 2));
+    };
+    
+    fs.writeFileSync(responseFile, JSON.stringify(responseData, null, 2));
+    
+    // Log to unified log
+    logBridgeActivity('RESPONSE', responseFile, responseData);
     
     logger.info(`Wrote response for request ${id} to ${responseFile}`);
     
@@ -377,6 +394,11 @@ async function processRequest(requestFile) {
     
   } catch (err) {
     logger.error(`Error processing request: ${err.message}`);
+    logEvent('DESKTOP_GATEWAY', 'REQUEST_ERROR', { 
+      file: requestFile, 
+      error: err.message,
+      stack: err.stack
+    });
     
     // Try to update the request status if possible
     try {
@@ -432,6 +454,11 @@ function updateGatewayStatus(status) {
 async function startGateway() {
   try {
     logger.info('Starting Claude Desktop Gateway...');
+    logEvent('DESKTOP_GATEWAY', 'STARTUP', { 
+      pid: process.pid,
+      version: '1.0.0',
+      node_version: process.version
+    });
     
     // Update gateway status
     updateGatewayStatus('starting');
@@ -473,6 +500,11 @@ async function startGateway() {
     // Set up health check interval
     setInterval(() => {
       updateGatewayStatus('running');
+      logEvent('DESKTOP_GATEWAY', 'HEALTH_CHECK', { 
+        status: 'running',
+        memory_usage: process.memoryUsage(),
+        uptime: process.uptime()
+      }, true);
     }, 60000);
     
     // Handle process termination
@@ -486,6 +518,10 @@ async function startGateway() {
     
   } catch (err) {
     logger.error(`Error starting gateway: ${err.message}`);
+    logEvent('DESKTOP_GATEWAY', 'STARTUP_ERROR', { 
+      error: err.message,
+      stack: err.stack
+    });
     updateGatewayStatus('error');
     process.exit(1);
   }

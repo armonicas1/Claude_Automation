@@ -47,7 +47,34 @@ function Write-StatusLine {
     Write-Host $Status -ForegroundColor $Color
 }
 
-# --- Check Functions ---
+# Import the Node.js logger if available
+function Log-ToUnified {
+    param (
+        [string]$Source = "SYSTEM_MONITOR",
+        [string]$Event,
+        [string]$Message,
+        [hashtable]$Data = @{}
+    )
+    
+    $logDir = Join-Path $PSScriptRoot "..\logs"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+    
+    $unifiedLog = Join-Path $logDir "unified-monitoring.log"
+    
+    $timestamp = Get-Date -Format "o"
+    $logEntry = @{
+        timestamp = $timestamp
+        source = $Source
+        event = $Event
+        message = $Message
+        data = $Data
+    } | ConvertTo-Json -Compress
+    
+    $formattedEntry = "[$timestamp] [$Source] [$Event] $logEntry"
+    Add-Content -Path $unifiedLog -Value $formattedEntry
+}
 
 function Get-ProcessStatus {
     Write-Header "PROCESS STATUS"
@@ -140,6 +167,41 @@ function Get-WslStatus {
     }
 }
 
+function Get-SystemInfo {
+    $processes = Get-Process claude,node -ErrorAction SilentlyContinue | 
+        Select-Object Name, Id, CPU, WorkingSet, StartTime, 
+        @{Name="ThreadCount";Expression={$_.Threads.Count}},
+        @{Name="HandleCount";Expression={$_.HandleCount}}
+    
+    $cpuLoad = (Get-WmiObject Win32_Processor).LoadPercentage
+    $memoryInfo = Get-WmiObject Win32_OperatingSystem
+    $freeMemory = [math]::Round($memoryInfo.FreePhysicalMemory / 1MB, 2)
+    $totalMemory = [math]::Round($memoryInfo.TotalVisibleMemorySize / 1MB, 2)
+    
+    return @{
+        timestamp = Get-Date -Format "o"
+        processes = $processes | ForEach-Object {
+            @{
+                name = $_.Name
+                id = $_.Id
+                cpu = $_.CPU
+                memory_mb = [math]::Round($_.WorkingSet / 1MB, 2)
+                threads = $_.ThreadCount
+                handles = $_.HandleCount
+                runtime = if ($_.StartTime) {
+                    [math]::Round(((Get-Date) - $_.StartTime).TotalMinutes, 2)
+                } else { 0 }
+            }
+        }
+        system = @{
+            cpu_load = $cpuLoad
+            free_memory_mb = $freeMemory
+            total_memory_mb = $totalMemory
+            memory_usage_percent = [math]::Round(100 - (($freeMemory / $totalMemory) * 100), 2)
+        }
+    }
+}
+
 function Invoke-Monitor {
     Clear-Host
     Write-Host "--- Claude System Monitor --- $(Get-Date) ---" -ForegroundColor Magenta
@@ -168,4 +230,21 @@ if ($Continuous) {
     }
 } else {
     Invoke-Monitor
+}
+
+while ($true) {
+    $systemInfo = Get-SystemInfo
+    
+    # Display for the user
+    # ... your existing display code ...
+    
+    # Log to unified log
+    Log-ToUnified -Event "PERIODIC_UPDATE" -Message "System status update" -Data $systemInfo
+    
+    if ($Continuous) {
+        Start-Sleep -Seconds 5
+        Clear-Host
+    } else {
+        break
+    }
 }

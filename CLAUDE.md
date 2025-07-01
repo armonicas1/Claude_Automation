@@ -1,1165 +1,229 @@
-# Claude Desktop Extension Troubleshooting Guide
 
-## Introduction
+# Enhancing Claude Desktop & Claude Code Integration: Agentic Workflows and Prompt Engineering
 
-This troubleshooting guide will help engineers diagnose and resolve issues with the Claude Desktop Extension system. The guide is based on a successful implementation and provides step-by-step approaches to resolving common problems that might be encountered when integrating Claude Desktop with Claude Code, particularly in WSL environments.
+**Introduction:** This technical guide provides a deep dive into extending **Claude Desktop** and **Claude Code** for advanced, agentic coding workflows. We cover how Anthropic’s Claude can be integrated as a development assistant via the **Model Context Protocol (MCP)**, how to engineer effective prompts for Claude, best practices for cross-platform integration (Windows + WSL), and recommended improvements to project documentation. The goal is to empower developers to build rich tool integrations and harness Claude’s capabilities through sophisticated prompt design.
 
-## System Architecture Overview
+## Claude Desktop & Claude Code Integration Capabilities
 
-The Claude Desktop Extension consists of several key components working together across different environments:
+### Model Integration via Anthropic’s MCP
 
-```
-Claude Desktop (Windows) ←→ MCP Server ←→ Bridge Process ←→ File System ←→ Claude Code (WSL)
-```
+Claude Desktop supports direct integration of external tools and data through Anthropic’s **Model Context Protocol (MCP)**. MCP is an open protocol that standardizes how applications connect AI models to various data sources and tools. In the Claude Desktop Extension, an MCP **server** runs as a lightweight Node.js process exposing custom tools to Claude, while Claude Desktop acts as the MCP **client/host**. This design allows Claude to plug into a growing list of integrations or custom servers, analogous to a “USB-C port for AI” that can interface with local files, APIs, or other resources.
 
-### Key Components
-- **MCP Server**: Custom WebSocket or Stdio-based server that Claude Desktop connects to
-- **Bridge Process**: Monitors and processes shared state files between environments
-- **Session Manager**: Handles authentication between Code and Desktop
-- **Plugin System**: Extends functionality with additional tools
-- **File-Based Communication**: Enables cross-environment messaging
+Using MCP for Claude Desktop offers several advantages. First, it enables a **single, centralized model session** – Claude Desktop serves as a gateway for all AI requests, so you only need to authenticate once and maintain one context. For example, Claude Code (Anthropic’s coding assistant) can send its queries to Claude Desktop instead of requiring a separate API key or login, leveraging the desktop app’s authenticated session. This unified approach **eliminates multiple API keys or logins** in different tools and ensures that all interactions share the same conversation context and memory. The extension’s Session Manager component coordinates authentication and session tokens across the desktop and code environments, so communications remain secure and consistent.
 
-## Prerequisites Check
+MCP’s flexible transport options include standard input/output (stdio), WebSockets, HTTP, and Server-Sent Events (SSE). For local integrations like this project, **stdio transport is recommended** as it avoids network overhead and simplifies setup. In practice, the Claude Desktop config is pointed to a Node.js script which it launches and communicates with via stdin/stdout. A best practice is to ensure the MCP server uses **pure JSON-RPC over stdio** – i.e. write only JSON responses to stdout and read JSON requests from stdin – with no stray console logs or text that could break the protocol. In fact, switching from a WebSocket-based server to a strict stdio-based server solved JSON parsing errors in this project: previously, logging output on stdout was being misinterpreted by Claude Desktop as malformed JSON, causing failures in tool registration. By confining all logs to a file and keeping the stdio channel clean, the extension achieved flawless JSON-RPC communication. **Tip:** If you implement a custom MCP server, redirect any debug logs to a file or stderr, and validate that every message on stdout is valid JSON. This will avoid issues where Claude Desktop’s MCP client attempts to parse non-JSON text.
 
-Before troubleshooting, ensure the following are installed and properly configured:
+Overall, Anthropic’s MCP integration in Claude Desktop lets you turn Claude into an **expandable platform**. The extension can register many specialized tools that Claude can call (via the MCP server), enabling it to perform actions beyond text generation. With this architecture, developers can build agent-like behaviors where Claude responds with tool actions, receives the results, and continues the conversation – all within one seamless session.
 
-1. **Node.js** (v16+, v18+ recommended)
-2. **Claude Desktop** application (latest version)
-3. **WSL** (Windows Subsystem for Linux) configured with Ubuntu 24.04 or similar
-4. **Claude Code CLI** installed in WSL
-5. **Administrative access** for modifying system files and running elevated processes
+### Claude Desktop’s Plugin Tool System
 
-## Quick System Status Verification
+On the Claude Desktop side, tools are organized through a **plugin system** that promotes modularity and easy extension. The extension can load custom plugins (e.g. JavaScript modules) which define new tools (functions that Claude can invoke via MCP). This means you can add functionality without altering Claude Desktop’s core code – simply drop in a new plugin file and it will be registered as a tool. In this project’s structure, a `/plugins` directory contains scripts like `file-operations-plugin.js`, `code-to-desktop-plugin.js`, etc., each exporting one or more tool definitions. The MCP server loads these on startup to make their capabilities available to the model.
 
-Run these commands to verify the system status:
+Each tool typically has a name, a description, and an input schema (defining expected parameters), and a handler function. When Claude Desktop starts the MCP server, it calls a `tools/list` method to retrieve all tool specs, so Claude becomes aware of the available actions it can perform. For example, this extension provides **Basic Extension Tools** like: `open_conversation` (open a specified chat by ID), `switch_model` (change the Claude model variant), `analyze_file` (have Claude read and summarize a local file), `save_conversation` (export the chat) and more. These let Claude control its own UI or data – e.g. `open_conversation` allows the assistant to switch context to a different thread on command. There are also **Bidirectional Communication Tools** for coordinating with Claude Code, such as `send_to_claude_code` (have Claude Desktop send a message/command into the Claude Code environment) and `get_claude_code_status` (check if Claude Code is running and responsive). Additionally, **Development Tools** in the “Model Gateway” plugin provide higher-level actions like `analyze_codebase` (review an entire codebase), `debug_with_browser_context` (debug using captured browser network data), and `code_review` (perform a thorough code review with external context). These demonstrate how the plugin system can be used to give Claude specialized skills for development workflows – even pulling in context from a web browser or performance monitors, then exposing a single command to trigger an in-depth analysis.
 
-```powershell
-# Check if MCP server is running
-Invoke-WebRequest -Uri "http://localhost:4323/.identity" -UseBasicParsing
+The key benefit of this plugin architecture is **extensibility**. New tools can be written and added without modifying the core application, and they are automatically picked up on restart. For instance, if you wanted Claude to interface with a database, you could create a `database-plugin.js` that defines tools like `query_database` (with a query string parameter) and `summarize_query_results`. After adding it, Claude would list it among its tools and could use it during a conversation. The extension’s modular design enables a “plug-and-play” approach to AI tooling – a powerful pattern for maintaining and growing an agent’s capabilities over time.
 
-# Check Claude Desktop processes
-Get-Process | Where-Object { $_.ProcessName -like "*claude*" -or $_.ProcessName -eq "node" } | Format-Table ProcessName, Id, MainWindowTitle
+### Bidirectional Communication Between Windows and WSL
 
-# Check MCP server logs
-Get-Content -Path "$env:APPDATA\Claude\logs\mcp-server-custom-extension.log" -Tail 20
+One challenge in this setup is that **Claude Code runs in a Linux environment (WSL)** while Claude Desktop runs on Windows. To enable these two to work together, the project implements **bidirectional file-based communication** between the Windows host and the WSL instance. In practice, this means using a set of shared directories (on the Windows filesystem, which WSL can also access via `/mnt/c/...`) as drop locations for messages. The Claude Desktop extension’s **Bridge process** (`claude-desktop-bridge.js`) monitors these directories and coordinates the data flow.
 
-# Check bridge logs
-Get-Content -Path ".\logs\bridge.log" -Tail 20
+Three special folders are used (automatically created in `%APPDATA%/Claude/` on Windows on first run) to facilitate messaging:
 
-# Check WSL integration
-wsl -d Ubuntu-24.04 -e claude --version
-```
+* **`code_requests/`** – Claude Code → Claude Desktop requests. When Claude Code (running in WSL) wants to ask the Claude model something or perform an action, it writes a JSON file into this folder (e.g. containing the user’s question or a command).
+* **`code_responses/`** – Claude Desktop → Claude Code responses. The extension will place the results of requests here. For example, after Claude generates an answer or completes a tool action, the response (text, JSON, etc.) is written as a file in this directory for Claude Code to read.
+* **`code_triggers/`** – Trigger files for asynchronous signals. Claude Code can drop a file here to signal an event or request that the Bridge is watching for (like a “please refresh” signal). The Bridge can also use it to notify Claude Code of certain events by creating trigger files.
 
-## Cross-Environment Architecture: Understanding WSL/Windows Integration
+The Bridge process constantly watches `code_requests` for new input from WSL (using a filesystem watcher). When it detects a new request file, it parses it and invokes the appropriate Claude Desktop action – for example, it might call a tool on Claude’s side or send a prompt to the Claude model. Once a result is ready, the Bridge writes out a corresponding file in `code_responses` which Claude Code will pick up. This effectively creates a **cross-platform pipeline**: Claude Code and Claude Desktop exchange information by reading/writing files, which is a simple but reliable method to communicate between Windows and WSL boundaries. The communication flow can be summarized as:
 
-The most critical challenge this system addresses is communication between two different execution environments on a single machine:
+<small>*Claude Code (WSL) →* write request file → *Windows Bridge picks up → Claude Desktop processes via Claude model → Windows Bridge writes response →* Claude Code reads response file\*</small>.
 
-### Two Different Execution Environments
+By using the Windows file system as the intermediary, we avoid network configuration issues and leverage WSL’s ability to see Windows drives (mounted under `/mnt/c/` in the Linux environment). **Note:** It’s important to start Claude Code in the context of your Windows project path. For example, if your project lives in `C:\Dev\MyProject`, you can launch Claude Code from that directory via the command `wsl claude` (which runs the `claude` CLI in WSL, pointed at the Windows folder). This way, Claude Code’s working directory `/mnt/c/Dev/MyProject` corresponds to your actual project files, preserving IDE integration and avoiding the need to copy files into the Linux file system. The shared folder approach then seamlessly works, since both environments are referencing the same files.
 
-```
-Claude Desktop: Running on Windows (native app)
-Claude Code: Running in WSL (Linux subsystem)
-```
+This bidirectional setup enables **cross-platform workflow automation**. For example, a developer can ask Claude (via Claude Code) to analyze a piece of code; Claude Code writes the request, Claude Desktop processes it with the AI (maybe using tools or accessing files), and the answer comes back into the code environment. Conversely, Claude Desktop (through a plugin tool) might proactively send a message to Claude Code – for instance, a tool could notify the IDE to open a specific file or highlight a snippet (`send_to_claude_code`). In summary, the Claude Desktop extension and Claude Code act in concert, using files and the Bridge as the messenger. This robust design works offline (no cloud needed beyond Claude’s API calls) and is resilient – even if one side restarts, the other can continue by checking the directories (state is loosely coupled via the file system).
 
-This fundamental challenge explains the architecture of the system:
+### Session Management and Context Persistence
 
-1. **File-Based Bridge**: Using shared mount points (`/mnt/c/Users/username/claude-bridge/`) as the communication channel
-2. **Process Isolation Handling**: Managing processes running in different OS environments
-3. **Configuration Synchronization**: Keeping configurations in sync across different file system roots
-
-### Shared File System Bridge
-
-The shared directory structure enables cross-environment communication:
-- Windows path: `C:\Users\username\claude-bridge\`
-- WSL path: `/mnt/c/Users/username/claude-bridge/`
-
-This shared directory contains:
-- Pending requests: Commands from Claude Code to Claude Desktop
-- Completed responses: Results from Claude Desktop back to Claude Code
-- Environment information: Authentication and configuration data
-
-## Common Issues and Solutions
-
-### 1. MCP Server Not Starting
-
-**Symptoms:**
-- "MCP Server not responding" error
-- Cannot connect to http://localhost:4323/.identity
-- "Server transport closed unexpectedly" messages in logs
-
-**Solutions:**
-
-1. **Check for port conflicts:**
-   ```powershell
-   # Find process using port 4323
-   netstat -ano | findstr :4323
-   
-   # If a process is found, kill it
-   $port = 4323
-   $processId = (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess
-   if ($processId) {
-       Stop-Process -Id $processId -Force
-       Write-Host "Process $processId using port $port has been terminated"
-   }
-   ```
-
-2. **Verify Node.js installation:**
-   ```powershell
-   node --version
-   ```
-   Make sure it's v16.0 or higher (v18+ recommended).
-
-3. **Check for multiple instances:**
-   ```powershell
-   # Find all Node.js processes that might be MCP servers
-   Get-Process | Where-Object { $_.ProcessName -eq "node" } | 
-   ForEach-Object { 
-     $proc = $_
-     $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
-     if ($cmdLine -like "*claude-mcp*") {
-       Write-Host "MCP server process: $($proc.Id) - $cmdLine"
-     }
-   }
-   ```
-
-4. **Try the Stdio-based server instead of WebSocket:**
-   - Update Claude Desktop configuration to use `custom-claude-mcp-stdio.js` instead of `custom-claude-mcp.js`
-   - This eliminates JSON parsing errors and improves reliability
-
-5. **Check the MCP server logs:**
-   ```powershell
-   Get-Content -Path "$env:APPDATA\Claude\logs\mcp-server-custom-extension.log" -Tail 50
-   ```
-
-### 2. JSON Parsing Errors
-
-**Symptoms:**
-- Error messages like: `Expected ',' or ']' after array element in JSON at position X`
-- Tools not appearing in Claude Desktop
-- MCP server connection issues
-
-**Solutions:**
-
-1. **Use the Stdio-based MCP server:**
-   - The Stdio-based server (`custom-claude-mcp-stdio.js`) avoids JSON parsing conflicts
-   - Update `claude_desktop_config.json` to use this server
-
-2. **Validate all tool definitions:**
-   ```powershell
-   # Create a validation script
-   @"
-   const fs = require('fs');
-   const path = require('path');
-
-   const pluginsDir = path.join(__dirname, 'plugins');
-   const plugins = fs.readdirSync(pluginsDir).filter(file => file.endsWith('.js'));
-
-   plugins.forEach(pluginFile => {
-     try {
-       const plugin = require(path.join(pluginsDir, pluginFile));
-       console.log(`\n--- Plugin: ${pluginFile} ---`);
-       
-       if (!plugin.tools || !Array.isArray(plugin.tools)) {
-         console.error('  No tools array exported');
-         return;
-       }
-       
-       plugin.tools.forEach(tool => {
-         console.log(`\nTool: ${tool.name}`);
-         try {
-           // Test serialization
-           const serialized = JSON.stringify(tool.parameters || tool.inputSchema);
-           const deserialized = JSON.parse(serialized);
-           console.log('  ✓ Valid JSON structure');
-         } catch (error) {
-           console.error(`  ✗ Invalid JSON: ${error.message}`);
-         }
-       });
-     } catch (error) {
-       console.error(`Error loading plugin ${pluginFile}: ${error.message}`);
-     }
-   });
-   "@ | Out-File -FilePath .\validate-tools.js
-
-   # Run the validation script
-   node .\validate-tools.js
-   ```
-
-3. **Fix common JSON issues:**
-   - Remove trailing commas in arrays and objects
-   - Ensure property names are properly quoted
-   - Check for malformed JSON structures
-
-4. **Implement JSON validation in your MCP server:**
-   ```javascript
-   function validateToolParameters(tool) {
-     try {
-       if (tool.parameters || tool.inputSchema) {
-         const paramObj = tool.parameters || tool.inputSchema;
-         const serialized = JSON.stringify(paramObj);
-         const deserialized = JSON.parse(serialized);
-         if (tool.parameters) tool.parameters = deserialized;
-         if (tool.inputSchema) tool.inputSchema = deserialized;
-       }
-       return true;
-     } catch (error) {
-       console.error(`Tool parameter validation failed for ${tool.name}: ${error.message}`);
-       return false;
-     }
-   }
-   ```
-
-### 3. Bridge Process Issues
-
-**Symptoms:**
-- Actions requested via MCP are not being processed
-- Constant "Detected change in session state file" messages in logs
-- Triggers not being picked up
-
-**Solutions:**
-
-1. **Check the bridge logs:**
-   ```powershell
-   Get-Content -Path ".\logs\bridge.log" -Tail 50
-   ```
-
-2. **Verify the session state file:**
-   ```powershell
-   Get-Content -Path "$env:APPDATA\Claude\session_state.json" | ConvertFrom-Json | Format-List
-   ```
-
-3. **Restart the bridge process:**
-   ```powershell
-   npm run start:bridge
-   ```
-
-4. **Clear and recreate the session state:**
-   ```powershell
-   Remove-Item -Path "$env:APPDATA\Claude\session_state.json"
-   node scripts/update-claude-config.js
-   ```
-
-5. **Check file monitoring:**
-   The bridge uses file system watchers which may occasionally miss events. Implement a polling fallback:
-   ```javascript
-   // Add this to the bridge process
-   setInterval(async () => {
-     await processSessionState();
-     await processCodeTriggers();
-   }, 5000);
-   ```
-
-### 4. WSL Integration Issues
-
-**Symptoms:**
-- Cannot execute Claude Code commands from WSL
-- Authentication errors between Claude Code and Desktop
-- "Cannot find path" errors with WSL paths
-
-**Solutions:**
-
-1. **Check WSL distribution and status:**
-   ```powershell
-   wsl -l -v
-   ```
-
-2. **Verify Claude installation in WSL:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e claude --version
-   ```
-
-3. **Check the shared bridge directory:**
-   ```powershell
-   Get-ChildItem -Path "C:\Users\username\claude-bridge" -Force
-   ```
-
-4. **Verify WSL can access Windows files:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e ls -la /mnt/c/Users/username/claude-bridge/
-   ```
-
-5. **Test direct WSL commands from Windows:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e claude --help
-   ```
-
-6. **Regenerate the authentication bridge:**
-   The `wsl-auth-bridge.js` script synchronizes credentials between environments:
-   ```powershell
-   wsl -d Ubuntu-24.04 -e node /mnt/c/Users/username/claude-bridge/wsl-auth-bridge.js
-   ```
-
-7. **Check path translation:**
-   WSL and Windows use different path formats. Ensure proper translation:
-   ```javascript
-   // Windows to WSL path
-   function toWslPath(windowsPath) {
-     return windowsPath.replace(/\\/g, '/')
-                       .replace(/^([A-Za-z]):/, (match, drive) => 
-                         `/mnt/${drive.toLowerCase()}`);
-   }
-   
-   // WSL to Windows path
-   function toWindowsPath(wslPath) {
-     const match = wslPath.match(/^\/mnt\/([a-z])(\/.*)?$/);
-     if (match) {
-       const drive = match[1].toUpperCase();
-       const rest = match[2] || '';
-       return `${drive}:${rest.replace(/\//g, '\\')}`;
-     }
-     return wslPath;
-   }
-   ```
-
-### 5. Claude Desktop Elevation Issues
-
-**Symptoms:**
-- Permission errors when accessing files
-- Tool operations failing with access denied errors
-- Configuration changes not being saved
-
-**Solutions:**
-
-1. **Run Claude Desktop as administrator:**
-   Create a PowerShell script (`run-claude-admin.ps1`) with:
-   ```powershell
-   # Request elevation if not already running as admin
-   if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-       Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-       exit
-   }
-
-   # Path to Claude Desktop executable
-   $claudePath = "${env:LOCALAPPDATA}\Claude\Claude.exe"
-
-   # Start Claude Desktop as admin
-   Start-Process -FilePath $claudePath
-   ```
-
-2. **Ensure MCP server has the same elevation level:**
-   - If Claude Desktop is elevated, the MCP server must also be elevated
-   - Use the `start-claude-admin-with-monitoring.ps1` script that handles this automatically
-
-3. **Check file permissions:**
-   ```powershell
-   # Check session state file permissions
-   Get-Acl -Path "$env:APPDATA\Claude\session_state.json" | Format-List
-   
-   # Grant full permissions if needed
-   $acl = Get-Acl "$env:APPDATA\Claude\session_state.json"
-   $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone","FullControl","Allow")
-   $acl.SetAccessRule($rule)
-   Set-Acl "$env:APPDATA\Claude\session_state.json" $acl
-   ```
-
-4. **Clean up and restart all processes:**
-   ```powershell
-   # Kill all Claude processes
-   Get-Process | Where-Object { $_.ProcessName -like "*claude*" } | Stop-Process -Force
-   
-   # Kill all Node.js processes
-   Get-Process | Where-Object { $_.ProcessName -eq "node" } | Stop-Process -Force
-   
-   # Start services with the admin script
-   .\start-claude-admin-with-monitoring.ps1
-   ```
-
-### 6. Plugin Loading Issues
-
-**Symptoms:**
-- Tools from plugins not appearing in the MCP server
-- "Plugin not found" errors
-- ESM module loading errors
-
-**Solutions:**
-
-1. **Check plugin syntax and structure:**
-   - Ensure plugins export a default object with the correct format
-   - Verify that tool definitions have proper `name`, `description`, and `parameters`/`inputSchema` fields
-
-2. **Verify plugin directory:**
-   ```powershell
-   Get-ChildItem -Path "./plugins" -Filter "*.js"
-   ```
-
-3. **Fix ESM loader path issues:**
-   ESM modules use `file://` URLs which can be problematic on Windows. Add this to your code:
-   ```javascript
-   import { fileURLToPath } from 'url';
-   import path from 'path';
-
-   // Convert ESM file:// URL to a regular path
-   const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-   const PLUGINS_DIR = path.join(SCRIPT_DIR, '..', 'plugins');
-   
-   // Load plugins from the resolved path
-   const pluginFiles = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith('.js'));
-   ```
-
-4. **Test plugin loading individually:**
-   ```powershell
-   # Create a test script
-   @"
-   import { fileURLToPath } from 'url';
-   import path from 'path';
-   
-   const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-   const pluginPath = path.join(SCRIPT_DIR, 'plugins', 'code-to-desktop-plugin.js');
-   
-   const { default: plugin } = await import(pluginPath);
-   console.log(JSON.stringify(plugin, null, 2));
-   "@ | Out-File -FilePath .\test-plugin.js
-   
-   # Run the test script
-   node .\test-plugin.js
-   ```
-
-5. **Fix CommonJS vs ESM issues:**
-   If you're mixing CommonJS and ESM modules, add a package.json in the plugins directory:
-   ```json
-   {
-     "type": "module"
-   }
-   ```
-
-## Advanced Troubleshooting
-
-### Transport Selection: WebSocket vs Stdio
-
-Claude Desktop supports two different transport mechanisms for MCP:
-
-#### WebSocket-Based MCP (Original Implementation)
-- **Configuration:**
-  ```json
-  {
-    "mcpServers": {
-      "custom-extension": {
-        "command": "node",
-        "args": ["path/to/custom-claude-mcp.js"],
-        "env": {},
-        "disabled": false
-      }
-    }
-  }
+Ensuring both Claude Desktop and Claude Code share the same **session context** is critical for a smooth experience. In this integration, the Claude Desktop app is the single point of contact with Anthropic’s model (all queries funnel through it), so it maintains the conversation history and context. The **Session Manager** module handles passing authentication tokens and session info between the desktop extension and the code environment. Essentially, Claude Desktop remains logged in (using either your Anthropic API key, OAuth token, or Claude Pro account session as configured), and Claude Code doesn’t need to prompt for any login – it trusts the desktop gateway. This not only simplifies setup (one login) but also means that any conversation you started in Claude Desktop can be continued in Claude Code or vice versa, since they’re really the same session behind the scenes.
+
+From an implementation standpoint, the extension uses **session tokens** and shared config files to authenticate cross-app communication securely. Only authorized processes (the ones you started as part of this integration) know where to read/write the requests and have the right token, so random processes can’t inject commands. When configuring the MCP server in Claude Desktop’s JSON config, you can include an `env` or a token file path to ensure that Claude Code’s requests include a valid token that the desktop will verify (this detail might be handled internally by Anthropic’s MCP handshake).
+
+Because Claude Desktop holds the context, it also has the full **conversation memory** (up to Claude’s context window limit). Claude Code can thus benefit from the extended context if Claude Desktop has a long conversation history loaded – the model will still “remember” prior messages. One should manage the session thoughtfully: if you want a fresh context for a new task, you might use the `open_conversation` tool to switch to a new or specific thread in Claude Desktop, so that the coding session doesn’t carry over irrelevant history. Conversely, to leverage earlier discussions, you intentionally stay in the same conversation.
+
+In summary, **session management best practice** is to treat Claude Desktop as the single source of truth for the model state. This yields a consistent, authenticated experience across the IDE and desktop. Always start Claude Code (WSL) *after* Claude Desktop is up and logged in, and ensure any required session tokens or config paths are correctly set so they handshake. Following this approach, all model calls from the IDE go through the same session pipeline, preserving continuity and avoiding mismatches in model state.
+
+**StdIO Transport Tips:** As noted, stdio is the preferred transport for the local MCP server. To implement it reliably, ensure your MCP server process flushes output promptly (Node’s stdout is usually line-buffered, so ending each JSON message with a newline helps). Do not prompt for any interactive input on stdin – Claude Desktop expects a strict request/response protocol. If your server needs configuration, use environment variables or config files rather than interactive prompts. You can also set a startup timeout in Claude Code (e.g. `MCP_TIMEOUT` env var) to wait a bit longer if your server takes time to initialize. Once running, you can use the Claude Code command `/mcp` to check tool availability and server status at any time. Following these practices, a stdio MCP server will be as stable as any built-in feature of Claude.
+
+## Prompt Engineering Techniques for Claude Models
+
+Designing effective prompts is essential to get the most out of Claude, especially when orchestrating complex tasks, code generation, or tool usage. This section provides a Claude-centric prompt engineering guide, combining general best practices with insights from the latest research (including Google’s prompt engineering paper by Lee Boonstra, 2024) and Anthropic’s recommendations. All guidance is oriented toward Claude’s strengths and nuances.
+
+### Claude Prompting Best Practices (Summary)
+
+When crafting prompts for Claude, keep the following best practices in mind (many drawn from Google’s 68-page prompt engineering guide, adapted for Claude):
+
+* **Provide Quality Examples:** Demonstrate the task with examples (one-shot or few-shot) to guide Claude on format, style, and scope. For instance, if you want Claude to output a summary, show it one or two sample texts and their summaries. High-quality, relevant examples clarify your expectations. *(Be cautious not to overfit – too many very specific examples might make the model mimic them too closely. Use diverse examples to cover edge cases while preventing the model from assuming a narrow pattern.)*
+
+* **Start Simple and Clear:** Nothing beats a concise, unambiguous prompt. Phrase the request clearly, using concrete verbs and instructions. If the task is complex, break the instructions into steps or bullet points for clarity. Avoid vague language – if *you* read the prompt and find it ambiguous, rephrase it. Claude responds best when it knows exactly what you want.
+
+* **Specify the Output Format:** Be explicit about how the answer should be given. If you need a list, say “Provide the answer as a bullet list.” If you expect JSON, say “Output JSON with the following keys: ...”. You can even define length or style (e.g. “a three-sentence summary in professional tone”). Claude will adhere closely to format instructions when clearly stated.
+
+* **Use Positive Instructions:** Focus on what to do, rather than what *not* to do. For example, prefer “Explain the concept in simple terms.” over “Don’t use technical jargon.” Positive phrasing guides the model better, whereas negative commands can sometimes be ignored or lead to unintended results (reserve “Don’t do X” only for critical safety or formatting constraints).
+
+* **Parameterize with Variables:** If your prompt will be reused with different inputs (names, dates, file names, etc.), use placeholders or variables. For example: *“Summarize the report in \<file\_path> and highlight any errors.”* Then replace `<file_path>` dynamically. This makes prompts reusable and easier to maintain. Claude doesn’t inherently have variables, but clearly delineating variable parts (with tokens or markup) can reduce confusion.
+
+* **Experiment with Input Structure:** Don’t hesitate to format your prompt in tables, bullet points, or sections with labels. Sometimes presenting information in a structured way can focus Claude’s attention. For example, you might list facts in bullet form and then ask a question about them. Claude can handle structured prompts well, and it may reduce misinterpretation.
+
+* **Regularly Test and Iterate:** Prompt performance can change with model updates. A phrasing that worked on Claude 2 months ago might behave slightly differently on Claude 2 (or Claude 4) after an update. Continually test your key prompts, and if Claude’s output quality drops, try slight adjustments. (Version notes: providers sometimes adjust model behaviors, so what was “good enough” might become suboptimal or vice versa. E.g., GPT-4.1 changes required prompt tweaks.) Keep a few test cases on hand to validate after any update.
+
+* **Try Different Output Modes:** By default Claude will answer in prose, but you can ask for outputs in **JSON, XML, CSV, or Markdown** depending on your needs. Structured outputs (like JSON) are easier to parse in code and can reduce your post-processing overhead. If you need a table of results, ask for a Markdown table. If you need a parsable response, explicitly say “Respond *only* with a JSON object containing ...”. Claude is usually happy to comply with format requests.
+
+* **Collaborate and Refine:** If working in a team, have someone else read your prompt – they might catch assumptions or ambiguities you missed. Keep versioned prompts or a changelog of what you’ve tried (even a simple comment in code or a document). This helps avoid repeating mistakes and documents which prompt strategies have been effective. Prompt engineering is an iterative, experimental process, so treat it like tuning a piece of code: adjust, test, evaluate.
+
+* **Leverage Claude’s Strengths:** Claude is built to be helpful, honest, and harmless by default (per Anthropic’s Constitutional AI). It often excels at tasks requiring reasoning, summarization, and following complex instructions. You generally don’t need to “trick” Claude into doing the right thing – a straightforward ask usually works. Use that to your advantage: be direct and assume Claude *will try* to follow your intent. Save the clever prompt tricks for cases where the direct approach fails.
+
+By following these guidelines, you set a strong foundation. Next, we explore more advanced prompt engineering techniques and how to apply them for specific scenarios like tool use, coding assistance, debugging, etc.
+
+### Advanced Prompting Techniques and Patterns
+
+Beyond the basics, there are several **prompting techniques** that can significantly enhance Claude’s performance on complex tasks. The Google prompt engineering whitepaper highlights many of these. Here we interpret them with a Claude-centric lens:
+
+* **Chain-of-Thought Prompting (CoT):** Encourage Claude to “think” through a problem step-by-step. This is usually done by appending an instruction like *“Let’s think this through step by step:”* or by explicitly asking for reasoning before the final answer. Claude, especially newer versions, is quite capable of complex reasoning; in fact, Anthropic notes that simpler CoT cues often suffice and that explicitly using CoT is most useful for *non*-reasoning-optimized models. Since Claude is tuned for reasoning, you might find it already does some internal CoT. However, for tricky problems (multi-step math, logical puzzles, code analysis), adding a CoT prompt can increase accuracy by breaking the task into sub-tasks. **Claude-specific tip:** Use Anthropic’s structured thinking format – you can wrap Claude’s reasoning in `<thinking> ... </thinking>` tags and the final answer in `<answer> ... </answer>` tags. Claude will then output its reasoning in the `<thinking>` block and the conclusion in `<answer>`, which is great for debugging its thought process or separating reasoning from the answer. This tag-based CoT is supported in Claude’s “extended thinking” mode and helps keep outputs organized.
+
+* **ReAct (Reason + Act):** ReAct is a prompting paradigm where the model alternates between reasoning and taking actions (like calling a tool). In a ReAct prompt, you might have Claude generate a thought, then an action command, then you (or an automated system) feed it the result of that action, then it continues reasoning, and so on. This is the backbone of **agentic behaviors**. With Claude, you often don’t need to manually format a ReAct prompt if you’re using Claude Code or a similar tool-using environment – the system manages the loops. But to design one yourself, you can do something like:
+
+  *User prompt:* “You are an AI that can use tools. When solving the task, first think through the plan, then if needed output an `<action>` with the tool name and inputs, then I’ll give you the tool’s output, and you continue. Finally, provide the answer. Task: **Find the weather in Paris and convert it to Fahrenheit.**”
+
+  Claude might then respond with a chain of thought and an action: e.g. `<thinking>It needs current weather. I should call the weather API.</thinking>\n<action>call_weather_api("Paris")</action>`. After the tool result is given, it continues reasoning, then gives the final answer. In practical Claude Desktop/Code usage, the tools are already registered and Claude will internally choose to invoke them. But ensuring your prompt implies that tool use is available (“you have access to X”) can help. ReAct shines in complex tasks requiring external info or code execution – Claude can iteratively reason and use tools, which is exactly how the Claude Code IDE plugin works to execute code, run bash commands, etc., in a safe loop. The key is to structure the prompt or system message such that Claude knows it can take those actions.
+
+* **Role (System) Prompting:** Set a **role or persona** for Claude to better target its responses. Anthropic allows a system message (role prompt) that isn’t user-visible to define context. For example, telling Claude *“You are a senior software engineer acting as a code reviewer. Be critical and detail-oriented.”* will yield a more focused and expert tone in its answers. Role prompting can **boost accuracy in domain-specific tasks** and adjust the style/tone to your needs. It helps Claude stay in character and within the scope you define (e.g., as a strict code linter, as a math tutor showing all steps, etc.). In our context, a system prompt might be used when launching Claude Code (Claude Code likely uses an internal system prompt to set the assistant as a coding helper). If you have access to set it, you should put any general “rules of engagement” or persona definitions there, and leave task-specific instructions in the user prompt. For instance, a system prompt for debugging might say: *“You are an AI debugging assistant. Always explain the root cause of issues and suggest focused fixes. Only produce tested, concise code patches.”* Then the user prompt provides the specific scenario. Role prompting is one of the **most powerful tools** for steering Claude’s behavior upfront, essentially preconditioning all its responses with the expertise or style you need.
+
+* **Step-by-Step Guidance (Step-by-step or “Step-back” prompting):** Rather than just saying “solve this,” you can explicitly instruct Claude to follow a procedure. For example: *“First, outline a plan. Then solve each step. Finally, give the answer.”* This is a more guided form of CoT. Another variant is *“Think about the problem abstractly for a moment before answering.”* (sometimes called step-back prompting) – it encourages Claude to reflect or generalize before diving in. In coding tasks, you might prompt: *“Analyze the following code. 1) Summarize what it does, 2) List any potential bugs or edge cases, 3) Propose improvements.”* Numbered steps in the prompt often lead to Claude structuring its answer in the same numbered format, which can ensure it covers all parts of your request. This technique is great for code review and debugging prompts where you want a thorough analysis.
+
+* **Multishot Prompting (Few-Shot):** As mentioned, providing examples can dramatically improve reliability. For instance, for a code formatting task, you might show an example input and the correctly formatted output, then say “Now format the following code: ...”. With Claude, you can include multiple examples by delineating them clearly (Anthropic suggests using `<examples><example>...<input>...<output>...</example>...</examples>` tags or similar for clarity). Claude will infer the pattern from the examples. Few-shot prompting effectively gives Claude mini-training on the spot. Keep examples **relevant and varied**: ensure they cover different aspects of the task so Claude doesn’t latch onto one pattern too rigidly. In Claude’s 100k-token context versions, you have plenty of room for examples if needed, but always balance quantity with quality.
+
+* **Self-Consistency & Majority Voting:** This isn’t a single prompt technique but a strategy: you pose the same prompt to Claude multiple times (with different randomness seeds or slightly rephrased) and then take the **most common answer** or aggregate the results. Research shows this “self-consistency” approach can yield more accurate answers for reasoning problems. In practice with Claude, you might generate 5 solutions to a tricky problem (by adjusting `temperature` or using the `/redo` command in Claude Code) and then see which answer appears most or cross-verify between them. If building an agent pipeline, you could automate this. Claude’s generally consistent, but this can help for critical tasks where correctness is paramount.
+
+* **Tree-of-Thought (ToT):** This advanced method prompts the model to explore multiple solution paths and possibly discard or compare them. For example, you can instruct: *“List two different approaches to solve this problem, then evaluate which is better, then provide the best solution.”* Claude will then produce, say, Approach A and Approach B (its “thought branches”), analyze them, and conclude with one answer. This can overcome situations where a single line of reasoning might get stuck or be biased. It’s particularly useful for creative problem-solving or design questions, and it leverages Claude’s ability to consider alternatives in one go. Ensure the prompt clearly indicates the need for multiple attempts or options.
+
+* **Automatic Prompt Generation (Meta-Prompting):** You can use Claude to improve your prompts. For instance, after describing a task, you could ask Claude *“Suggest three different prompts that might better instruct an AI to do this task.”* This meta-prompting has Claude effectively doing prompt engineering for you. Another trick: if Claude’s response isn’t what you want, you can ask *“Claude, how could I phrase my request to get \[desired outcome]?”* – often it will explain what is missing or unclear. Google’s paper and other research highlight this as “Automatic Prompt Engineer” usage. With Claude’s usually helpful nature, it will often comply and give you ideas. Just be mindful not to reveal any sensitive details in such queries if using external tools.
+
+* **Use Structured Prompt Formats:** Anthropic recommends using **XML/HTML-style tags** to structure complex prompts, which can be very effective. For example, you might format a prompt as:
+
   ```
-- **Pros:** Standard WebSocket protocol, works across networks
-- **Cons:** More prone to JSON parsing errors, requires port management
-
-#### Stdio-Based MCP (Recommended for Local Use)
-- **Configuration:**
-  ```json
-  {
-    "mcpServers": {
-      "custom-extension": {
-        "command": "node",
-        "args": ["path/to/custom-claude-mcp-stdio.js"],
-        "env": {},
-        "disabled": false
-      }
-    }
-  }
+  <context> ... (some background info) ... </context> 
+  <instructions> ... (the task instruction) ... </instructions> 
+  <formatting> ... (desired output format description) ... </formatting> 
   ```
-- **Pros:** No JSON parsing errors, no port conflicts, simpler implementation
-- **Cons:** Limited to local processes, requires proper stdout/stderr separation
-
-### Testing with Direct Client
-
-The included test client can help diagnose MCP communication issues:
-
-```powershell
-node scripts/test-client.js
-```
-
-This interactive client allows you to:
-- Connect to the MCP server
-- Call specific tools
-- See raw responses
-- Diagnose communication issues
-
-For Stdio-based MCP servers, use the specialized test client:
-
-```powershell
-node scripts/test-client-stdio.js
-```
-
-### Diagnosing Claude Code WSL Integration
-
-The WSL integration can be tested and debugged using these approaches:
-
-1. **Test basic WSL connectivity:**
-   ```powershell
-   wsl --status
-   wsl -l -v
-   ```
-
-2. **Verify Claude Code installation in WSL:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e claude --version
-   wsl -d Ubuntu-24.04 -e claude --help
-   ```
-
-3. **Check Claude credentials in WSL:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e ls -la ~/.claude
-   wsl -d Ubuntu-24.04 -e ls -la ~/.claude/.credentials.json
-   ```
-
-4. **Test the WSL bridge directory:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e ls -la /mnt/c/Users/username/claude-bridge/
-   ```
-
-5. **Check if the file watcher is running:**
-   ```powershell
-   wsl -d Ubuntu-24.04 -e ps aux | grep "node.*wsl-auth-bridge"
-   ```
-
-### Port Conflict Resolution
-
-Port conflicts with 4323 are a common issue. Here's how to resolve them:
-
-1. **Find processes using port 4323:**
-   ```powershell
-   netstat -ano | findstr :4323
-   ```
-
-2. **Identify the process:**
-   ```powershell
-   $port = 4323
-   $processId = (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess
-   if ($processId) {
-       Get-Process -Id $processId | Format-Table Id, ProcessName, Path
-   }
-   ```
-
-3. **Kill the process:**
-   ```powershell
-   if ($processId) {
-       Stop-Process -Id $processId -Force
-       Write-Host "Process $processId using port $port has been terminated"
-   }
-   ```
-
-4. **Change the port if necessary:**
-   - Update `config/claude-config.json` to use a different port
-   - Update the MCP server code to use the new port
-   - Update any test clients to use the new port
-
-### Comprehensive Process Cleanup
-
-When all else fails, this script will clean up all related processes:
-
-```powershell
-# Kill all Claude-related processes
-Get-Process | Where-Object { $_.ProcessName -like "*claude*" } | ForEach-Object {
-    Write-Host "Stopping Claude process: $($_.Id) - $($_.ProcessName)"
-    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-}
-
-# Kill all Node.js processes
-Get-Process | Where-Object { $_.ProcessName -eq "node" } | ForEach-Object {
-    $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
-    Write-Host "Stopping Node.js process: $($_.Id) - $cmdLine"
-    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-}
-
-# Release port 4323
-$port = 4323
-$processId = (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess
-if ($processId) {
-    Write-Host "Stopping process using port $port: $processId"
-    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-}
-
-# Clear any stale lock files
-if (Test-Path "$env:TEMP\claude-mcp-server.lock") {
-    Remove-Item "$env:TEMP\claude-mcp-server.lock" -Force
-}
-
-Write-Host "All processes cleaned up. Wait a moment before restarting services."
-Start-Sleep -Seconds 2
-```
-
-## Logging and Monitoring
-
-For effective troubleshooting, set up comprehensive logging:
-
-### 1. Enable Verbose Logging
-
-In `config/claude-config.json`:
-```json
-{
-  "logLevel": "debug",
-  "logToFile": true,
-  "logDir": "./logs"
-}
-```
-
-### 2. Multi-Window Log Monitoring
-
-This PowerShell function creates separate console windows for monitoring multiple logs:
-
-```powershell
-function Start-LogMonitoring {
-    # Create MCP server log window
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'MCP Server Log' -ForegroundColor Yellow; Get-Content -Path '$PWD\logs\mcp-server.log' -Tail 20 -Wait"
-    
-    # Create bridge log window
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'Bridge Log' -ForegroundColor Green; Get-Content -Path '$PWD\logs\bridge.log' -Tail 20 -Wait"
-    
-    # Create Claude Desktop MCP extension log window
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'Claude Desktop MCP Extension Log' -ForegroundColor Cyan; Get-Content -Path '$env:APPDATA\Claude\logs\mcp-server-custom-extension.log' -Tail 20 -Wait"
-    
-    # Create Claude Desktop main log window
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "Write-Host 'Claude Desktop Main Log' -ForegroundColor Magenta; Get-Content -Path '$env:APPDATA\Claude\logs\main.log' -Tail 20 -Wait"
-}
-```
-
-### 3. Real-time Process Monitoring
-
-This script continuously monitors Node.js processes:
-
-```powershell
-while ($true) {
-    Clear-Host
-    Write-Host "Node.js Processes:" -ForegroundColor Yellow
-    Get-Process | Where-Object { $_.ProcessName -eq "node" } | Format-Table Id, CPU, WorkingSet, Path -AutoSize
-    
-    Write-Host "Claude Processes:" -ForegroundColor Cyan
-    Get-Process | Where-Object { $_.ProcessName -like "*claude*" } | Format-Table Id, CPU, WorkingSet, MainWindowTitle -AutoSize
-    
-    Write-Host "Port 4323 Usage:" -ForegroundColor Green
-    $port = 4323
-    $connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-    if ($connections) {
-        foreach ($conn in $connections) {
-            $process = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-            Write-Host "Process $($conn.OwningProcess) ($($process.ProcessName)) is using port $port"
-        }
-    } else {
-        Write-Host "No process is using port $port"
-    }
-    
-    Start-Sleep -Seconds 2
-}
-```
-
-## Testing and Verification
-
-After troubleshooting, verify the system is functioning correctly:
-
-### 1. Test MCP Server Connectivity
-
-```powershell
-Invoke-WebRequest -Uri "http://localhost:4323/.identity" -UseBasicParsing
-```
-
-Expected output:
-```
-StatusCode        : 200
-StatusDescription : OK
-Content           : {"name":"Claude Desktop Extension","version":"1.0.0","signature":"claude-desktop-extension","capabilities":["tools","resources"]}
-```
-
-### 2. Test Tool Availability
-
-Use the test client to verify tools are registered correctly:
-```powershell
-node scripts/test-client.js
-```
-
-Select option 1 to see available tools. You should see a list including:
-- open_conversation
-- switch_model
-- analyze_file
-- save_conversation
-- execute_from_code
-- check_trigger_status
-
-### 3. Test Bridge Process
-
-Create a test trigger to verify the bridge is processing files:
-```powershell
-$triggerContent = @{
-  id = "test-trigger-$(Get-Date -Format 'yyyyMMddHHmmss')"
-  action = "test"
-  params = @{
-    message = "This is a test trigger"
-  }
-  status = "pending"
-  timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-} | ConvertTo-Json
-
-$triggerFile = Join-Path -Path $env:APPDATA -ChildPath "Claude\code_triggers\test-trigger.json"
-$triggerContent | Out-File -FilePath $triggerFile -Encoding utf8
-```
-
-Check the bridge logs to see if it detected and processed the trigger.
-
-### 4. Test WSL Integration
-
-Test WSL integration by running Claude Code commands:
-```powershell
-wsl -d Ubuntu-24.04 -e claude -p "Hello from WSL"
-```
-
-### 5. Test Bidirectional Communication
-
-Test the communication from Claude Code to Desktop:
-```powershell
-# Run in WSL
-wsl -d Ubuntu-24.04 -e bash -c "echo '{\"action\":\"open_conversation\",\"params\":{\"conversation_id\":\"test\"}}' > /mnt/c/Users/username/claude-bridge/pending/request-$(date +%s).json"
-```
-
-Check if the bridge process detects and processes this request.
-
-## Common Error Messages and Solutions
-
-### "Expected ',' or ']' after array element in JSON"
-
-**Root Cause:** Trailing commas in JSON structures that Claude Desktop's strict parser rejects.
-
-**Solution:** 
-1. Use the Stdio-based MCP server
-2. Implement JSON validation for all tool definitions
-3. Use `JSON.parse(JSON.stringify(obj))` to sanitize objects
-
-### "Server transport closed unexpectedly"
-
-**Root Cause:** The MCP server process crashed or exited unexpectedly.
-
-**Solution:**
-1. Check for port conflicts
-2. Verify the MCP server code doesn't have syntax errors
-3. Look for uncaught exceptions in the MCP server logs
-4. Check permissions if running as different users
-
-### "listen EADDRINUSE: address already in use"
-
-**Root Cause:** Another process is already using port 4323.
-
-**Solution:**
-1. Find and terminate the process using port 4323
-2. Use a different port for the MCP server
-3. Implement a lock file mechanism to prevent multiple instances
-4. Wait for ports to be released before starting
-
-### "Cannot find module" or "Error: Cannot find module"
-
-**Root Cause:** Issues with Node.js module resolution, especially with ESM imports.
-
-**Solution:**
-1. Check for typos in import paths
-2. Use absolute paths instead of relative paths
-3. Verify package.json has correct "type" field
-4. For ESM modules, use fileURLToPath for proper path resolution
-
-### "ENOENT: no such file or directory"
-
-**Root Cause:** File path issues, especially between WSL and Windows.
-
-**Solution:**
-1. Use path translation functions to convert between WSL and Windows paths
-2. Check file permissions and existence before operations
-3. Implement robust path resolution and validation
-4. Use absolute paths whenever possible
-
-## Comprehensive Start-up Script
-
-For a complete solution, use this start-up script that handles all common issues:
-
-```powershell
-param([switch]$Stop = $false)
-
-# Request admin if needed
-if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $($Stop ? '-Stop' : '')" -Verb RunAs
-    exit
-}
-
-function Close-AllProcesses {
-    # Kill all Claude processes
-    Get-Process | Where-Object { $_.ProcessName -like "*claude*" } | ForEach-Object {
-        Write-Host "Stopping Claude process: $($_.Id) - $($_.ProcessName)"
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
-
-    # Kill all Node.js processes
-    Get-Process | Where-Object { $_.ProcessName -eq "node" } | ForEach-Object {
-        $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
-        Write-Host "Stopping Node.js process: $($_.Id) - $cmdLine"
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
-
-    # Release port 4323
-    $port = 4323
-    $processId = (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess
-    if ($processId) {
-        Write-Host "Stopping process using port $port: $processId"
-        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-    }
-
-    # Close monitoring windows
-    Get-Process | Where-Object { $_.MainWindowTitle -like "*Log*" -and $_.ProcessName -eq "powershell" } | Stop-Process -Force
-
-    Write-Host "All processes closed." -ForegroundColor Green
-}
-
-function Start-LogMonitoring {
-    # Create log monitoring windows as described earlier
-}
-
-function Start-ClaudeDesktopWithMonitoring {
-    Write-Host "Starting Claude Desktop with full monitoring..." -ForegroundColor Green
-
-    # Clean up existing processes
-    Close-AllProcesses
-    Start-Sleep -Seconds 2
-
-    # Create log directories
-    if (-not (Test-Path ".\logs")) {
-        New-Item -Path ".\logs" -ItemType Directory | Out-Null
-    }
-
-    # Configure Claude Desktop to use the MCP server
-    $configDir = "$env:APPDATA\Claude"
-    $configPath = "$configDir\claude_desktop_config.json"
-    
-    # Create config directory if it doesn't exist
-    if (-not (Test-Path $configDir)) {
-        New-Item -Path $configDir -ItemType Directory | Out-Null
-    }
-
-    # Choose the right MCP server implementation
-    $stdioServerPath = "$PWD\src\custom-claude-mcp-stdio.js"
-    $wsServerPath = "$PWD\src\custom-claude-mcp.js"
-    
-    $serverPath = if (Test-Path $stdioServerPath) { $stdioServerPath } else { $wsServerPath }
-    $serverName = if ($serverPath -like "*stdio*") { "stdio-server" } else { "ws-server" }
-    
-    # Create or update the config
-    $config = @{
-        mcpServers = @{
-            "custom-extension" = @{
-                command = "node"
-                args = @($serverPath)
-                env = @{}
-                disabled = $false
-            }
-        }
-    }
-
-    # Save the config
-    $config | ConvertTo-Json -Depth 10 | Out-File -FilePath $configPath -Encoding utf8
-
-    # Create session state file if it doesn't exist
-    $sessionStatePath = "$configDir\session_state.json"
-    if (-not (Test-Path $sessionStatePath)) {
-        @{
-            last_updated = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-            pending_actions = @()
-            bridge_info = @{
-                status = 'initializing'
-                timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-            }
-        } | ConvertTo-Json -Depth 10 | Out-File -FilePath $sessionStatePath -Encoding utf8
-    }
-
-    # Start log monitoring
-    Write-Host "Starting log monitoring..." -ForegroundColor Yellow
-    Start-LogMonitoring
-    Start-Sleep -Seconds 2
-
-    # Start bridge process
-    Write-Host "Starting bridge process..." -ForegroundColor Yellow
-    Start-Process node -ArgumentList "$PWD\src\claude-desktop-bridge.js" -WindowStyle Hidden
-
-    # Start Claude Desktop
-    Write-Host "Starting Claude Desktop..." -ForegroundColor Yellow
-    Start-Process -FilePath "${env:LOCALAPPDATA}\Claude\Claude.exe"
-
-    # Wait for MCP server to start
-    Write-Host "Waiting for MCP server to start..." -ForegroundColor Yellow
-    $maxAttempts = 30
-    $attempts = 0
-    $success = $false
-
-    while ($attempts -lt $maxAttempts -and -not $success) {
-        try {
-            $response = Invoke-WebRequest -Uri "http://localhost:4323/.identity" -UseBasicParsing -ErrorAction Stop
-            if ($response.StatusCode -eq 200) {
-                $success = $true
-                Write-Host "MCP server is running!" -ForegroundColor Green
-                Write-Host "Response: $($response.Content)" -ForegroundColor Green
-            }
-        } catch {
-            Write-Host "Waiting for MCP server... (attempt $($attempts+1)/$maxAttempts)" -ForegroundColor Yellow
-            Start-Sleep -Seconds 2
-        }
-        $attempts++
-    }
-
-    if (-not $success) {
-        Write-Host "Warning: MCP server did not respond after $maxAttempts attempts." -ForegroundColor Red
-        Write-Host "Check the logs for more information." -ForegroundColor Red
-    } else {
-        # Create a test trigger to verify bridge functionality
-        Write-Host "Creating test trigger to verify bridge functionality..." -ForegroundColor Yellow
-        $triggerContent = @{
-            id = "test-trigger-$(Get-Date -Format 'yyyyMMddHHmmss')"
-            action = "test"
-            params = @{
-                message = "This is a test trigger"
-            }
-            status = "pending"
-            timestamp = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
-        } | ConvertTo-Json
-
-        $triggerDir = "$env:APPDATA\Claude\code_triggers"
-        if (-not (Test-Path $triggerDir)) {
-            New-Item -Path $triggerDir -ItemType Directory | Out-Null
-        }
-
-        $triggerFile = Join-Path -Path $triggerDir -ChildPath "test-trigger.json"
-        $triggerContent | Out-File -FilePath $triggerFile -Encoding utf8
-
-        Write-Host "Test trigger created at: $triggerFile" -ForegroundColor Green
-        Write-Host "Check the bridge log window to see if it was processed." -ForegroundColor Green
-    }
-
-    Write-Host "Setup complete!" -ForegroundColor Green
-    Write-Host "Claude Desktop should be running with the extension configured." -ForegroundColor Green
-    Write-Host "To stop all processes, run: .\start-claude-admin-with-monitoring.ps1 -Stop" -ForegroundColor Yellow
-}
-
-# Main execution
-if ($Stop) {
-    Close-AllProcesses
-} else {
-    Start-ClaudeDesktopWithMonitoring
-}
-```
-
-## MCP Architecture Deep Dive
-
-Understanding the Model Context Protocol (MCP) architecture is crucial for troubleshooting:
-
-### Transport Mechanisms
-
-Claude Desktop supports two transport mechanisms:
-
-1. **WebSocket Transport**:
-   - Uses WebSocket protocol for communication
-   - Requires port binding (usually 4323)
-   - Allows network-based communication
-   - More prone to JSON parsing errors
-
-2. **Stdio Transport**:
-   - Uses standard input/output streams
-   - No port binding required
-   - Limited to local processes
-   - More reliable for JSON handling
-   - Requires careful separation of logging and communication
-
-### MCP Configuration File Hierarchy
-
-The MCP system uses multiple configuration files:
-
-1. **Claude Desktop Application Config**:
-   - Located at `%LOCALAPPDATA%\AnthropicClaude\config.json`
-   - Controls auto-start behavior
-   - References the MCP server config file
-
-2. **MCP Server Config**:
-   - Located at `%APPDATA%\Claude\claude_desktop_config.json`
-   - Defines MCP server launch parameters
-   - Specifies command, arguments, and environment variables
-
-3. **Session State File**:
-   - Located at `%APPDATA%\Claude\session_state.json`
-   - Tracks bridge process status
-   - Contains pending actions and results
-   - Monitored by the bridge process
-
-### JSON-RPC Protocol
-
-The MCP uses JSON-RPC 2.0 for communication:
-
-1. **Request Format**:
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": 1,
-     "method": "tools/list",
-     "params": {}
-   }
-   ```
-
-2. **Response Format**:
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": 1,
-     "result": {
-       "tools": [...]
-     }
-   }
-   ```
-
-3. **Error Response Format**:
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": 1,
-     "error": {
-       "code": -32700,
-       "message": "Parse error"
-     }
-   }
-   ```
-
-### Tool Registration
-
-Tools must be registered in a specific format:
-
-```javascript
-{
-  name: "tool_name",
-  description: "Tool description",
-  inputSchema: {  // Note: Claude Desktop prefers inputSchema over parameters
-    type: "object",
-    properties: {
-      param1: {
-        type: "string",
-        description: "Parameter description"
-      }
-    },
-    required: ["param1"]
-  },
-  handler: async (params) => {
-    // Tool implementation
-  }
-}
-```
-
-## WSL/Windows Integration: The Core Architectural Challenge
-
-The fundamental challenge this project addresses is communication between two different execution environments:
-
-### Two Different Execution Environments
-
-```
-Claude Desktop: Running on Windows (native app)
-Claude Code: Running in WSL (Linux subsystem)
-```
-
-This creates several challenges:
-
-1. **File System Differences**:
-   - Windows paths: `C:\Users\username\...`
-   - WSL paths: `/mnt/c/Users/username/...`
-
-2. **Process Isolation**:
-   - Windows processes can't directly access WSL processes and vice versa
-   - Different permission models and user contexts
-
-3. **Authentication Differences**:
-   - Claude Desktop uses Windows authentication
-   - Claude Code uses WSL (Linux) authentication
-   - Credentials stored in different locations
-
-### The Bridge Solution
-
-The system uses a file-based bridge to solve these challenges:
-
-1. **Shared Directory**:
-   - Windows: `C:\Users\username\claude-bridge\`
-   - WSL: `/mnt/c/Users/username/claude-bridge/`
-   - Files in this directory can be accessed from both environments
-
-2. **File-Based Communication**:
-   - `pending/` directory for requests from Claude Code to Claude Desktop
-   - `completed/` directory for responses from Claude Desktop to Claude Code
-   - `claude-env.bat` for sharing authentication data
-
-3. **Authentication Bridge**:
-   - `wsl-auth-bridge.js` script synchronizes credentials between environments
-   - Extracts credentials from Claude Code in WSL
-   - Creates Windows-accessible credentials for Claude Desktop
-
-This approach allows secure bidirectional communication without requiring complex network setup.
-
-## Production Deployment
-
-For production environments, consider these additional steps:
-
-### 1. Windows Service Setup
-
-Use NSSM (Non-Sucking Service Manager) to create a Windows service:
-
-```powershell
-# Install NSSM (if not already installed)
-# Download from http://nssm.cc/ and place in PATH
-
-# Create the service
-nssm install "Claude Desktop Extension" powershell.exe -ExecutionPolicy Bypass -File "C:\path\to\start-claude-admin-with-monitoring.ps1"
-nssm set "Claude Desktop Extension" DisplayName "Claude Desktop Extension"
-nssm set "Claude Desktop Extension" Description "MCP server and bridge for Claude Desktop integration"
-nssm set "Claude Desktop Extension" Start SERVICE_AUTO_START
-```
-
-### 2. Scheduled Task Alternative
-
-Alternatively, create a scheduled task to run at startup:
-
-```powershell
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -File `"C:\path\to\start-claude-admin-with-monitoring.ps1`""
-$trigger = New-ScheduledTaskTrigger -AtLogon
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName "Claude Desktop Extension" -Action $action -Trigger $trigger -Principal $principal -Settings $settings
-```
-
-### 3. WSL Auto-Start
-
-Configure the WSL bridge to start automatically:
-
-1. Create a startup script in WSL:
-   ```bash
-   #!/bin/bash
-   # Save as /home/username/start-claude-bridge.sh
-   node /mnt/c/Users/username/claude-bridge/wsl-auth-bridge.js
-   ```
-
-2. Make it executable:
-   ```bash
-   chmod +x /home/username/start-claude-bridge.sh
-   ```
-
-3. Add to `.profile` in WSL:
-   ```bash
-   echo "/home/username/start-claude-bridge.sh" >> ~/.profile
-   ```
-
-## Conclusion
-
-This troubleshooting guide covers the most common issues encountered when setting up and using the Claude Desktop Extension system, particularly with WSL integration. The key to success is understanding the cross-environment architecture and implementing proper validation and error handling.
-
-For ongoing maintenance:
-
-1. **Regular Log Monitoring**: Check logs regularly for errors or warnings
-2. **Configuration Backup**: Keep backups of all configuration files
-3. **Process Monitoring**: Monitor system resource usage for any abnormalities
-4. **Testing**: Regularly test functionality with the provided test scripts
-5. **Updates**: Keep all components (Node.js, Claude Desktop, WSL) updated
-
-By following this guide, you should be able to diagnose and resolve most issues with the Claude Desktop Extension system and maintain a reliable integration between Claude Desktop and Claude Code.
-
-## Additional Resources
-
-- [Claude Desktop Documentation](https://docs.anthropic.com/claude/docs/claude-desktop)
-- [Claude Code CLI Documentation](https://docs.anthropic.com/claude/docs/claude-code)
-- [Model Context Protocol (MCP) Specification](https://docs.anthropic.com/claude/docs/model-context-protocol-mcp)
-- [WSL Documentation](https://learn.microsoft.com/en-us/windows/wsl/)
-- [Node.js Documentation](https://nodejs.org/en/docs/)
-- [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
+
+  This clarity helps Claude distinguish between different parts of the prompt (it won’t confuse context for a question, or instructions for content). It can reduce errors and ensure no part of your prompt is overlooked. When expecting a structured response, you can even ask Claude to use tags in its answer (for instance, `<analysis>...</analysis><conclusion>...</conclusion>`). While Claude wasn’t explicitly trained on custom tags, it tends to honor the structure and it makes post-processing easier (you can parse the XML/HTML). In summary, **format your prompt** like a well-structured document for complex tasks. This technique pairs well with others (e.g. examples inside `<examples>` tags, reasoning inside `<thinking>` as mentioned, etc.).
+
+By combining these advanced techniques, you can design prompts that truly harness Claude’s capabilities. In particular, **Claude excels in “agentic” modes** where it can reason and act using tools (via MCP) – the next section will tie prompt design into those concrete use cases like code review and debugging.
+
+### Designing Prompts for Coding Tasks and Agentic Behavior
+
+Finally, let’s look at specific scenarios relevant to Claude as a coding assistant, and how to tailor prompts for each:
+
+* **Agentic Tool Use (ReAct style):** If you want Claude to behave like an autonomous agent that uses tools (which is essentially what Claude Code does under the hood), structure your instructions to enable that. Define the context that tools are available and what they do. For example: *“You are an AI agent with access to the following tools: `compile_code` (compiles given code and returns errors), `run_tests` (runs the test suite). Your goal is to fix any bugs in the code. Use the tools as needed by outputting an action like `<action tool=\"compile_code\">filename.py</action>`. You can use multiple actions and reasoning steps. Finish with a solution when done.”* This kind of prompt explicitly tells Claude how to call tools and encourages iterative reasoning. In many cases, you might not hand-write such a prompt because Claude Code’s environment implicitly does this. But understanding it helps you troubleshoot or tweak behavior. **Claude-centric note:** Claude is quite good at following a format once you show it – e.g., if you provide the `<action>` XML format as above, it will use it consistently in its outputs (Anthropic even suggests using XML for tool calls in their docs). During agentic problem solving, monitor Claude’s chain-of-thought and actions. If it’s not using a tool when it should, you may need to prompt hint it (e.g. “(Hint: You may find it useful to compile the code to see the errors.)”). If it’s over-using tools or stuck in a loop, you might need a condition to break out or a firmer instruction on when to stop. A well-designed agent prompt sets the objective, lists available actions, and lets Claude decide the rest – leveraging ReAct dynamics to let it figure out the solution through trial and error with tools.
+
+* **Code Review and Quality Analysis:** For reviewing code, your prompt should set Claude into the mindset of a meticulous reviewer. A good pattern is to provide the code (or a relevant excerpt) and explicitly ask for analysis in specific areas. For example: *“You are a veteran software engineer reviewing code. Below is a function:\n`python\n(def code here)\n`\n**Tasks:** 1) Explain what this code does. 2) Identify any bugs or mistakes. 3) Suggest improvements or best practices (style, efficiency, clarity). Provide your answer in a structured format, with separate sections for each task.”* This prompt gives clear direction. We’ve asked for an explanation, bugfind, and improvements – and even numbered them. Claude will likely produce a well-organized answer (perhaps with headings “1. Function Explanation”, “2. Potential Bugs”, etc.). Including the role hint “you are a veteran engineer” further ensures it responds in an authoritative and thorough manner. If the code is large, consider focusing the prompt or reviewing in chunks. Claude can handle very large inputs (tens of thousands of tokens) in latest versions, but it might not need the entire repository at once – target specific files or functions for deeper review. Also, encourage Claude to use **extended reasoning**: e.g., “Think step-by-step and check each logic branch for errors (you can use a reasoning section if needed).” This way, if there’s a hidden bug, Claude is more likely to catch it by systematically walking through the code logic. One can also ask for output in a convenient format, like Markdown bullet points for each issue found, or even a diff of suggested changes. Claude is capable of producing code diffs or patches if asked (though be cautious – verify any patch it suggests).
+
+* **Debugging and Error Resolution:** When you have a specific bug or error message, the prompt should provide Claude with all relevant info and direct it to the root cause. For instance: *“The following code is throwing an error.\n`python\n<code snippet>\n`\nError message:\n`\n<traceback or error>\n`\nHelp me debug this. Explain why this error is happening and propose a fix. Think through each step of the code’s execution.”* Here, we’ve given context (code + error) and a clear goal. Including the exact error text is very useful – Claude can recognize common errors (like a KeyError, NullPointer, etc.) and recall typical causes. The instruction “think through each step” triggers a chain-of-thought approach; Claude might enumerate the flow of the code until the error occurs, identify the faulty assumption or missing check, and then provide a fix. If the bug is not obvious, you can further prompt Claude to consider multiple hypotheses (like “What could possibly cause this? List a few possibilities.”) – akin to the Tree-of-Thought approach. Another tip: encourage Claude to use its *internal* debugger. This isn’t literal, but you can say “Feel free to simulate the code in parts to test your understanding.” Claude might then mentally execute the code on an example input – something it often does if asked. For complex environments, debugging might involve external data or environment state; in such cases, if you have tools wired up, Claude could use them (for example, a `read_log` tool to fetch runtime logs). But purely in prompt, always include any relevant context that a developer would check (config values, earlier functions, etc.). The more complete the picture, the better Claude’s diagnosis. Finally, ask for a fix. Claude will typically not only explain the fix but also often provide a corrected code snippet if the prompt implies it should. This can save a lot of time in troubleshooting.
+
+* **Tool Invocation in Prompts:** In general, if you want Claude to explicitly use a tool or give a certain kind of answer, you should mention it in your prompt. For instance, “Use the `bash` tool to show the contents of the directory before proceeding” or “If you need data from the internet, you can call the web search tool.” However, when using Claude Desktop/Code, direct tool calls are usually managed by the system – you as the user typically just state the problem, and the agent decides if a tool is needed. Still, there are times you might **nudge tool usage**. Example: “Can you check the runtime of this function? (You may use the timing tool to measure execution time).” This gentle parenthetical hint gives Claude the green light to use that tool. Another scenario: you have a custom tool `translate_text` – you could prompt “Please translate this paragraph into French. (There’s a `translate_text` tool available for accurate translation.)” In testing, Claude will then likely invoke that tool rather than trying to translate with the base model. So, while you usually don’t *order* the AI to use a tool (the agent logic does it), mentioning the tool’s existence and purpose in the prompt can lead to better results. Also, understand the format: if tools are invoked via a specific syntax (like `/tool_name` commands or XML as described), ensure Claude knows that. The environment might handle it, but if you ever do a manual prompt outside of Claude Code, you’d include the format in your instructions. For example, Anthropic’s own documentation shows using a special syntax for tools in some contexts (like in their API, tools are called via JSON in a message). In sum, to get Claude to use tools effectively: make the **problem inherently solvable by the tool**, and hint at the tool if needed. If the environment is set up properly, Claude will take it from there.
+
+To wrap up prompt engineering: **always test your prompt strategies in incremental steps.** Start with a simple prompt; see what Claude does. Add an example; see if it improves. Try a chain-of-thought cue; observe the difference. This iterative approach, combined with the techniques above, will yield a robust prompt playbook for Claude. And remember, **prompt engineering is as much art as science** – leverage Claude’s feedback (it’s often willing to tell you how to ask better) and don’t be afraid to get creative in structuring your prompts.
+
+## Integration Architecture & Best Practices (Windows + WSL)
+
+In this section, we shift focus back to the system integration aspect: how to reliably run and manage the Claude Desktop extension alongside Claude Code across Windows and WSL. We share battle-tested patterns, error handling techniques, and process management tips gleaned from the development of this project.
+
+### Two-Tier Architecture and Process Coordination
+
+As described, the system consists of two main tiers:
+
+* The **Claude Desktop Extension tier** (running on Windows) – including the MCP server (tools provider) and Bridge.
+* The **Claude Code (IDE) tier** (running in WSL) – the development assistant interface.
+
+It’s crucial to start and coordinate these components properly. A recommended approach is to use a **startup script** that automates the launch sequence and ensures all pieces are in the correct state. In this project, a PowerShell script `start-claude-admin-with-monitoring.ps1` is used to orchestrate everything. Key steps it performs:
+
+1. **Privilege Check:** It requests Administrator rights on Windows (since certain operations, like opening privileged ports or writing to Program Files, may require elevation).
+2. **Process Cleanup:** It checks for any stray instances of Claude Desktop or Node processes from previous runs and terminates them. This prevents issues like port 4323 being already in use by a “ghost” process. Specifically, the script looks for any process using the MCP port and kills it, and also deletes any lock file (if used to signal an active server).
+3. **Update Configuration:** Before launch, it programmatically edits the Claude Desktop config file to ensure it points to the correct MCP server script (e.g. switching between WebSocket vs stdio implementations as needed). This guarantees Claude Desktop will load the intended extension.
+4. **Launch Claude Desktop:** The script starts the Claude Desktop app (in admin mode) and waits for it to initialize.
+5. **Start MCP Server (if not auto-started):** In this project, Claude Desktop itself spawns the MCP server based on config. If you had external servers, you’d start them now. The script verifies the MCP server is running and reachable (for example, by pinging an `/health` or `.well-known/identity` endpoint on it).
+6. **Start the Bridge Process:** Next, the bridge (`claude-desktop-bridge.js`) is started via Node. This process immediately begins monitoring the shared directories for any triggers or requests.
+7. **Launch Claude Code (WSL):** Finally, the script uses the `run-claude-code.bat` to invoke Claude Code in WSL. This `.bat` likely does something akin to `wsl -d <UbuntuDistribution> claude` (with some checks for Node path) to ensure the CLI starts in the context of the project.
+8. **Monitoring Windows:** The “with monitoring” script also opens separate console windows to tail the logs of various components (MCP server log, bridge log, Claude Desktop log). This gives the developer real-time feedback on what’s happening and is invaluable for debugging (you can see if a JSON parse error or an exception occurs immediately).
+
+Using a unified script for startup ensures **process management discipline**: no component is left behind or started out of order. For example, launching Claude Code before Claude Desktop is ready could cause connection failures. The script approach serialized everything with proper waits. It also provides a single command to shut down all processes (`-Stop` flag in this case) to cleanly exit, again avoiding orphaned processes.
+
+### Robust Patterns for Cross-Environment Operation
+
+**Shared Path Configuration:** As pointed out, using the same file paths in Windows and WSL avoids duplication. It’s good practice to **store configuration and state in a path accessible to both OSes**. Here `%APPDATA%/Claude` (which is something like `C:\Users\<Name>\AppData\Roaming\Claude`) is used for shared files. WSL can access this as `/mnt/c/Users/<Name>/AppData/Roaming/Claude`. If you create any additional directories for communication, do so under a Windows path like that. Avoid having WSL write to its Linux-only filesystem for things the Windows side needs to read – Windows cannot see into the WSL VM’s ext4 filesystem, but WSL can see Windows files. So the interoperability is one-directional in that sense. Always choose the shared path accordingly (i.e., prefer Windows host paths for shared data).
+
+**File Watching and Debouncing:** The project uses file watchers (via Node’s `fs.watch` or the `chokidar` library) to detect new files. A common pattern is to write a file then perhaps write another soon after – be careful to **debounce events** or identify them uniquely. In development, there was an issue where rapid creation and deletion of a “session state” file led to a feedback loop (Claude Desktop and the extension both reacting to changes). This was solved by adding timestamps or flags to changes so that each side could ignore events it originated (or only react if a real update happened). The takeaway: implement simple checks to prevent infinite ping-pong of file events. For example, the bridge can ignore a trigger file that it already processed and not re-process one with the same name or content. Logging each file event with a timestamp (and comparing to last event time) is another way to filter out noise.
+
+**Error Handling & Validation:** When connecting multiple systems (Claude, Node server, WSL, etc.), errors can happen at any junction. It’s important to **fail gracefully and log clearly**. Some proven practices:
+
+* **Validate JSON everywhere:** Since communication relies on JSON (for tool definitions, request/response payloads), enforce strict JSON compliance. The project developers encountered mysterious JSON parse errors which turned out to be due to trailing commas in a JS object literal that got serialized. In non-admin mode the app might have tolerated it, but in admin mode, Claude Desktop used a stricter parser that choked on it. They solved this by writing a utility `validateToolParameters` to deep-clone and re-parse tool definitions, stripping out any illegal JSON (like `undefined` values or trailing commas). Similarly, before sending any JSON to Claude Desktop or Claude Code, they `JSON.stringify` and `JSON.parse` it as a test to ensure it’s valid. Adopting these checks prevents a whole class of issues. So, validate data structures at boundaries and prefer standards-compliant JSON.
+* **Add robust try/catch around plugin loads and tool execution:** A buggy plugin should not crash the whole server. In this project, loading of each plugin is wrapped in error handling – if one plugin throws, it logs the error but continues loading the rest. Tools are registered only if their schema passed validation. This way, a single malformed tool doesn’t break the MCP server.
+* **Graceful handling of tool actions:** If a tool action fails (e.g., a file isn’t found for `analyze_file` or a command in WSL returns non-zero), catch that in the tool handler and return an error message or code back to Claude, rather than letting it throw uncaught. Claude, upon receiving an error result, can then explain it to the user or decide an alternate step. Always prefer an error response over silence or a hang.
+* **Logging and Correlation:** Ensure all components log their key activities and errors to log files. This project has logs for the MCP server (`mcp-server-stdio.log`), the Claude Desktop extension (`mcp-server-custom-extension.log`), the bridge (`bridge.log`), and Claude Desktop’s own log (`main.log`). When debugging, it was essential to correlate events across these logs by timestamp. Therefore, it’s wise to use consistent time formats in logs and include identifiers (like request IDs or tool names) in log lines. If a request “ID 42” comes from Claude Code, you might log “\[Request 42 received]” on the bridge and “\[Request 42 processed]” on the MCP server. This makes it much easier to trace the lifecycle of each action.
+
+**Process Management:** Running multiple node processes and an Electron app (Claude Desktop) together can get tricky. We suggest a few patterns:
+
+* **Singleton enforcement:** Use a simple lock file or PID file mechanism for the MCP server to ensure only one instance runs at a time. This project implemented a lock at `%TEMP%/claude-mcp-server.lock` for example – on startup, if the file exists, the server either exits or overwrites it, and on exit it deletes it. This prevents accidentally running multiple extension servers which could conflict.
+* **Port management:** The default MCP port was 4323. If you change it or use multiple servers, avoid well-known or privileged ports. The documentation notes to prefer ports above 1024 to avoid needing admin rights (some systems require elevation for low ports). Also, if using WebSocket/HTTP transports, implement a check/retry if the port is taken – e.g., try next port or prompt user. In our case, switching to stdio made port moot for the main server (Claude Desktop spawned it internally), but we still had a dev server on 4323 for the gateway mode. The startup script’s port release snippet (using `Get-NetTCPConnection` to find whoever holds 4323 and kill it) is a good example of ensuring the port is free.
+* **Cleanup on exit:** Write cleanup routines for both normal exit and crashes. Catch `SIGINT` (Ctrl+C) and `SIGTERM` in your Node processes to perform cleanup (delete lock files, close any open file watchers or database connections). This reduces the chance of resource leakage. For instance, if the bridge quits ungracefully, Claude Code might keep waiting on a response that never comes. In such a case, maybe have Claude Code monitor a heartbeat file or use a timeout to alert the user that connection was lost. In any event, design for resilience: if one part dies, it shouldn’t take manual effort to reset everything. The provided script helps by killing and restarting all pieces.
+
+**WSL Considerations:** Make sure the WSL environment is configured correctly:
+
+* Use the Node version recommended (Node 18+). If you have multiple Node versions, ensure Claude Code is using the Linux one (the Anthropic docs warn about WSL sometimes accidentally invoking Windows Node which causes failures). The fix is to either specify the path or adjust your `$PATH` so the Linux `/usr/bin/node` is used. Running `which node` in the WSL terminal should not point to a `/mnt/c/...` path.
+* Set up any required build tools in WSL (e.g., `gcc` if needed for certain npm modules, `make`, etc.). Claude Code itself mostly just needs Node and npm, but if your tools involve other binaries (like running code that calls Python or C++), those need to be installed in WSL too.
+* Mind the file permission differences between Windows and WSL. If Claude Desktop writes a file that WSL needs to modify, there shouldn’t be an issue as Windows drives mounted in WSL typically allow write. But occasionally, there could be executable permission quirks. For example, a script created on Windows might need `chmod +x` in WSL if you want to execute it in Linux. Plan for these if your workflow generates scripts or binaries via Claude.
+
+**Monitoring & Health Checks:** In a complex system, it’s useful to build in some health checks. We have logs, but one can also add programmatic checks:
+
+* The extension could have a “heartbeat” tool that simply returns “OK” – Claude Code can call this periodically or on demand to verify connectivity (the `/mcp` status command in Claude Code likely does something similar under the hood).
+* Monitor resource usage if needed (CPU, memory) of these processes, especially for long-running usage. Claude with a 100k context can be memory heavy; ensure your system has sufficient RAM or add swaps in WSL if necessary.
+* If using this in a team, consider a **watchdog script** that restarts any component that fails. During development, running everything under a supervisor (like nodemon or PM2 for Node processes, and ensuring Claude Desktop auto-relaunches on crash) can reduce downtime.
+
+In summary, these integration practices boil down to **automating everything**, **validating everything**, and **logging everything**. The combination of a well-structured startup/shutdown, solid error handling, and careful cross-OS considerations will result in a robust system. This project’s successful integration of Claude Desktop and Claude Code in WSL stands as proof: with the right architecture, you can achieve a seamless AI-assisted development environment that feels like a single coherent tool, even though under the hood it’s multiple processes on two operating systems coordinating via files and protocols.
+
+## Recommended Enhancements to Project Documentation (README)
+
+Finally, based on our deep dive, here are key enhancements that should be made to the project’s README (and related docs) to assist future users and developers. In particular, clarifying **Monitoring & Debugging**, **Troubleshooting**, and **Tool Extension** procedures will greatly improve the user experience:
+
+* **Monitoring & Debugging:** Document how to use the provided monitoring tools and interpret logs. For example, explain the purpose of `start-claude-admin-with-monitoring.ps1` – that running this will launch all components and open log windows for real-time monitoring. List the log file locations and what each contains (e.g. *“`%APPDATA%\Claude\logs\mcp-server-custom-extension.log` – logs from the custom MCP server tools initialization; `%APPDATA%\Claude\logs\main.log` – Claude Desktop application log; `logs/bridge.log` – bridge process log; etc.”*). Instruct users to check these logs when things go wrong. Also mention that Claude Desktop may require **Administrator mode** for certain actions, as discovered (file operations or binding low ports) – so if something silently fails, running with admin rights could be the solution. Encouraging users to use tools like Task Manager (on Windows) or `htop` (in WSL) to see if all processes are running can be helpful for debugging too. Essentially, the README should guide how to watch the system in action and identify where an error might be occurring (via logs and process monitors).
+
+* **Troubleshooting Section:** Add a comprehensive troubleshooting guide covering common issues and resolutions:
+
+  * **JSON Parsing Errors:** If users see errors about JSON (e.g., *“Expected ',' or ']' after array element…”*), explain that this is likely due to a formatting issue in tool definitions or responses. The fix is to remove trailing commas or otherwise sanitize JSON. Mention that the extension now handles most of these (via internal validation), but if a custom plugin is added, ensure it exports valid JSON structures.
+  * **Port Conflicts:** If Claude Desktop is stuck “connecting” or the MCP server won’t start, the cause might be port 4323 already in use (perhaps a stale process). Instruct on how to free the port – either by rebooting the `start-claude` script with `-Stop` (which cleans processes) or manually killing the process using that port (provide a command like `Get-NetTCPConnection -LocalPort 4323` in PowerShell). Also remind them not to run two instances of Claude Desktop at once under the same user profile, as that could spawn multiple MCP servers.
+  * **Claude Code Not Responding:** If the Claude Code CLI isn’t launching or is unresponsive: ensure WSL is installed and the `claude` CLI is installed inside WSL (with Node correctly configured). If `claude` command is not found in WSL, they may need to run the installation script or `npm install -g @anthropic-ai/claude-code` in the WSL environment. Also point out the tip of running `npm config set os linux` and reinstalling if installation fails on WSL due to OS detection.
+  * **WSL Path Issues:** Clarify that Claude Code must be launched from the project directory on Windows (so that it sees the files). If someone mistakenly `cd` into the WSL home and runs `claude`, it won’t see the Windows project files. Provide the correct usage (`wsl claude` from the Windows path, or using the provided `.bat`). Additionally, if file operations from Claude Desktop result in `ENOENT` (file not found), it could be a path translation issue – emphasize that using the shared directories as configured will avoid this (no need to manually copy files).
+  * **Permission Errors:** If a tool fails due to permission (e.g., trying to open a protected file or write in a protected directory), advise running Claude Desktop as admin or adjusting the file location. For example, if analyzing a file in `C:\Program Files\`, Claude Desktop might need elevation.
+  * **Multiple Instances/Lockups:** If things behave strangely (like no response from Claude, or duplicate actions), check for multiple running instances of the MCP server. The README should mention that the extension uses a lock file to prevent this, but if users ever bypass the script and start things manually, they should be careful not to start two. If unsure, stop all and use the script to restart cleanly.
+
+  Each of these should be a bullet or sub-item in *Troubleshooting* with symptoms and solutions. This will greatly help users self-diagnose issues in this somewhat complex setup.
+
+* **Tool Extension Guide:** Provide a section that explains how to add or modify tools in the extension’s plugin system. For instance:
+
+  * Explain the **plugins directory structure** and how each file is expected to export tools. (E.g., “Each plugin file should module.exports an array of tool definitions or a single tool. See `file-operations-plugin.js` for an example structure.”)
+  * Detail the fields of a tool definition: name (unique identifier), description (what the tool does, shown to Claude), inputSchema (JSON schema describing inputs) or parameters, and the handler function (the code that runs when Claude invokes the tool). Clarify that the handler runs in Node (as part of the MCP server) and can do anything a Node process can – file I/O, HTTP calls, etc., then returns output to Claude.
+  * Emphasize the need to keep tool definitions JSON-serializable. No functions or complex types in the definition object – just data. If using an input schema, ensure it’s a valid JSON schema. If not, use a simple parameter list.
+  * Mention how to register a new tool: in this project, simply placing the plugin file will cause it to be loaded on restart (the MCP server loads all `.js` in the plugins folder). In other setups, one might need to edit a config to include it, but here it’s automated.
+  * Encourage testing new tools: after adding, run the system and use the `/mcp` command in Claude Code to list tools or ask Claude Desktop (maybe via a special command) to list tools. Make sure the new tool appears and has the correct schema. If not, check the logs for any plugin load error.
+  * Also, briefly cover **MCP server extension**: If one wants to integrate an entirely new MCP server (separate process), say to connect an external API via HTTP or SSE, they can use `claude mcp add` commands. For instance, adding a remote HTTP tool could be documented. But this might be beyond the core project scope; still, referencing Anthropic’s official docs for MCP (modelcontextprotocol.io) and how Claude Desktop config can include multiple servers (the JSON config’s mcpServers object can list more than one) would be useful for advanced users. Essentially, let readers know: *it’s extendable – read **CUSTOM\_MCP\_IMPLEMENTATION.md** and Anthropic’s documentation for more ideas*.
+
+In incorporating these improvements, the README will become a much more useful resource. It will guide new users through setting up and diagnosing the system, and empower developers to extend it. Given the complexity of an AI integration like this, thorough documentation is as important as the code itself. By following the above recommendations – adding clarity on monitoring, providing solutions to common problems, and outlining how to safely extend the toolset – the project will be more maintainable and user-friendly for everyone.
+
+**Sources:**
+
+1. Anthropic Documentation – *Model Context Protocol (MCP)*; *Claude Code Setup*; *Prompt Engineering Best Practices*; *Role Prompting*
+
+2. Project Context (Claude Desktop Extension) – *Architecture & Status*; *Configuration and Scripts*; *Issue Resolutions*
+
+3. Google Prompt Engineering Guide (2024) – *Best Practices Summary*; *Advanced Techniques (CoT, ReAct, etc.)*
+
+4. Reddit & Community Insights – *WSL Integration Tip*; *Claude Code on Windows workflow*.

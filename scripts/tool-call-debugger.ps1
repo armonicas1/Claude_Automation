@@ -29,6 +29,36 @@ function Write-StatusLine {
     Write-Host $Status -ForegroundColor $Color
 }
 
+# Import the Node.js logger if available
+function Log-ToUnified {
+    param (
+        [string]$Source = "TOOL_DEBUGGER",
+        [string]$Event,
+        [string]$Message,
+        [hashtable]$Data = @{
+        }
+    )
+
+    $logDir = Join-Path $PSScriptRoot "..\logs"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+
+    $unifiedLog = Join-Path $logDir "unified-monitoring.log"
+
+    $timestamp = Get-Date -Format "o"
+    $logEntry = @{
+        timestamp = $timestamp
+        source    = $Source
+        event     = $Event
+        message   = $Message
+        data      = $Data
+    } | ConvertTo-Json -Compress
+
+    $formattedEntry = "[$timestamp] [$Source] [$Event] $logEntry"
+    Add-Content -Path $unifiedLog -Value $formattedEntry
+}
+
 # --- Live Debugger Functions ---
 
 function Get-LiveHealthStatus {
@@ -37,7 +67,7 @@ function Get-LiveHealthStatus {
     $mcpProcess = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
         (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine -like "*mcp-stdio*"
     } | Select-Object -First 1
-    
+
     if ($mcpProcess) {
         $status.MCPProcess = "Running (PID: $($mcpProcess.Id))"
         $status.MCPProcessColor = 'Green'
@@ -71,7 +101,6 @@ function Get-LiveHealthStatus {
     return $status
 }
 
-
 function Start-LiveDebugger {
     $logPath = "$env:APPDATA\Claude\logs\mcp-server-custom-extension.log"
     if (-not (Test-Path $logPath)) {
@@ -95,10 +124,10 @@ function Start-LiveDebugger {
     while ($true) {
         Clear-Host
         $health = Get-LiveHealthStatus
-        
+
         # --- Draw Dashboard ---
         Write-Header "LIVE TOOL CALL DEBUGGER"
-        
+
         # Health Panel
         Write-Host "System Health:" -ForegroundColor White
         Write-StatusLine -Label "MCP Process" -Status $health.MCPProcess -Color $health.MCPProcessColor
@@ -110,17 +139,17 @@ function Start-LiveDebugger {
         Write-Host "Last Tool Call Analysis:" -ForegroundColor White
         Write-StatusLine -Label "Tool Name" -Status $lastToolCall.Name -Color 'Cyan'
         Write-StatusLine -Label "Status" -Status $lastToolCall.Status -Color $(
-            if ($lastToolCall.Status -match 'Success') {'Green'} 
-            elseif ($lastToolCall.Status -match 'Failed') {'Red'} 
+            if ($lastToolCall.Status -match 'Success') {'Green'}
+            elseif ($lastToolCall.Status -match 'Failed') {'Red'}
             else {'Yellow'}
         )
         Write-Host "  Parameters:" -ForegroundColor White
         Write-Host "  $($lastToolCall.Params)" -ForegroundColor Gray
         Write-Host "  Result/Error:" -ForegroundColor White
         Write-Host "  $($lastToolCall.Result)" -ForegroundColor Gray
-        
+
         Write-Header "LIVE EVENT LOG (Watching: $logPath)"
-        
+
         # --- Process new log entries ---
         $file = Get-Item $logPath
         $currentWriteTime = $file.LastWriteTime
@@ -128,10 +157,10 @@ function Start-LiveDebugger {
         if ($script:lastLogWriteTime -ne $currentWriteTime) {
             # Get only the new content since the last check
             $newContent = Get-Content $logPath | Select-Object -Skip $script:lastLogPosition
-    
+
             foreach ($line in $newContent) {
                 $json = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
-                
+
                 if (-not $json) {
                     Write-Host $line -ForegroundColor DarkGray
                     continue
@@ -148,6 +177,12 @@ function Start-LiveDebugger {
                     $lastToolCall.Result = "Waiting for response..."
                     $lastToolCall.Timestamp = Get-Date
                     Write-Host "[$timestamp] TOOL CALL  => $($lastToolCall.Name)" -ForegroundColor Magenta
+
+                    Log-ToUnified -Event "TOOL_CALL_DETECTED" -Message "Detected tool call" -Data @{
+                        tool      = $lastToolCall.Name
+                        parameters = $lastToolCall.Params
+                        requestId  = $lastToolCall.ID
+                    }
                 }
                 # Check for a response (success or failure)
                 elseif ($json.id -eq $lastToolCall.ID) {
@@ -161,6 +196,13 @@ function Start-LiveDebugger {
                         $lastToolCall.Result = $json.error | ConvertTo-Json -Compress
                         Write-Host "[$timestamp] ERROR      <= Response for $($lastToolCall.Name) -> $($json.error.message)" -ForegroundColor Red
                     }
+
+                    Log-ToUnified -Event "TOOL_RESPONSE_DETECTED" -Message "Detected tool response" -Data @{
+                        tool        = $lastToolCall.Name
+                        result      = $lastToolCall.Result
+                        requestId    = $lastToolCall.ID
+                        executionTime = (New-TimeSpan -Start $lastToolCall.Timestamp -End (Get-Date)).TotalMilliseconds
+                    }
                 }
             }
 
@@ -168,7 +210,7 @@ function Start-LiveDebugger {
             $script:lastLogWriteTime = $currentWriteTime
             $script:lastLogPosition += $newContent.Count
         }
-        
+
         Start-Sleep -Seconds 1 # Wait for a moment before the next dashboard refresh
     }
 }
@@ -179,7 +221,7 @@ function Show-StaticStatus {
     Write-StatusLine -Label "MCP Process" -Status $health.MCPProcess -Color $health.MCPProcessColor
     Write-StatusLine -Label "MCP Port (4323)" -Status $health.MCPPort -Color $health.MCPPortColor
     Write-StatusLine -Label "Bridge Process" -Status $health.BridgeProcess -Color $health.BridgeProcessColor
-    
+
     if ($TestTool) {
         Write-Host ""
         Write-Host "--- Invoking Tool: $ToolName ---" -ForegroundColor Yellow
@@ -194,7 +236,6 @@ function Show-StaticStatus {
         }
     }
 }
-
 
 # --- Main Execution ---
 if ($Live) {

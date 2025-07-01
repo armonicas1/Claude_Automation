@@ -206,11 +206,13 @@ async function analyzeInstallation() {
     try {
       // Try multiple distribution naming conventions
       const distributions = [
-        'Ubuntu-24.04',
+        'Ubuntu-24.04',  // Prioritize Ubuntu 24.04 as primary target
         'Ubuntu 24.04',
+        'Ubuntu24.04',
         'Ubuntu',
         'Ubuntu-24',
-        'Ubuntu-22.04'  // Even try previous version as last resort
+        // Try other versions only as fallbacks
+        'Ubuntu-22.04'
       ];
       
       for (const dist of distributions) {
@@ -604,7 +606,12 @@ async function runCommand(command) {
     
     exec(command, options, (error, stdout, stderr) => {
       if (error) {
-        logger.error(`Command failed: ${command} - Error: ${error.message}`);
+        // Log error but with more details about WSL distro issues
+        if (command.includes('wsl -d') && command.includes('Ubuntu-22.04')) {
+          logger.error(`WSL distro command failed: ${command} - This may be because Ubuntu-22.04 is not installed. Trying alternate distributions.`);
+        } else {
+          logger.error(`Command failed: ${command} - Error: ${error.message}`);
+        }
         reject(error);
       } else {
         resolve(stdout);
@@ -704,7 +711,7 @@ async function checkWslToolkit() {
         }
       }
       
-      // If WSL is detected, check for Ubuntu-24.04 distribution
+      // If WSL is detected, check for Ubuntu-24.04 distribution with priority
       if (results.wslInstalled) {
         try {
           // Try with full path first
@@ -715,12 +722,39 @@ async function checkWslToolkit() {
           logger.info(`WSL distributions (verbose): ${wslList.replace(/\n/g, ' | ')}`);
           
           // More flexible Ubuntu 24.04 detection (handle different formats)
-          const ubuntuPatterns = ['Ubuntu-24.04', 'Ubuntu 24.04', 'Ubuntu24.04', 'Ubuntu-24', 'Ubuntu24', 'Ubuntu 24'];
+          // Prioritize Ubuntu 24.04 formats first
+          const ubuntuPatterns = [
+            'Ubuntu-24.04', 
+            'Ubuntu 24.04', 
+            'Ubuntu24.04', 
+            'Ubuntu-24', 
+            'Ubuntu24', 
+            'Ubuntu 24'
+          ];
+          
           const hasUbuntu = ubuntuPatterns.some(pattern => wslList.includes(pattern));
           
           if (wslList && hasUbuntu) {
             results.ubuntu24Installed = true;
             logger.info('Ubuntu 24.04 distribution found');
+            
+            // If we found Ubuntu 24.04, update the session state to indicate the correct distro
+            try {
+              let sessionState = {};
+              if (fs.existsSync(sessionStatePath)) {
+                sessionState = JSON.parse(fs.readFileSync(sessionStatePath, 'utf8'));
+              }
+              
+              // Add/update WSL info in session state
+              sessionState.wsl_info = sessionState.wsl_info || {};
+              sessionState.wsl_info.detected_distro = 'Ubuntu-24.04';
+              sessionState.wsl_info.last_check = Date.now();
+              
+              fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
+              logger.info('Updated session state with correct WSL distro information');
+            } catch (err) {
+              logger.error(`Error updating session state with WSL info: ${err.message}`);
+            }
           }
         } catch (err) {
           // Try without verbose flag
