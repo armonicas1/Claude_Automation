@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# tool-call-debugger.ps1 v2.0
+# tool-call-debugger.ps1 v2.1
 # Live, interactive dashboard for monitoring MCP tool calls in real-time.
 
 param(
@@ -79,6 +79,10 @@ function Start-LiveDebugger {
         return
     }
 
+    # Initialize state variables for tracking log file changes
+    $script:lastLogPosition = (Get-Content $logPath).Count
+    $script:lastLogWriteTime = (Get-Item $logPath).LastWriteTime
+
     $lastToolCall = [PSCustomObject]@{
         ID = $null
         Name = 'N/A'
@@ -118,53 +122,54 @@ function Start-LiveDebugger {
         Write-Header "LIVE EVENT LOG (Watching: $logPath)"
         
         # --- Process new log entries ---
-        Get-Content $logPath -Wait -Tail 0 -Timeout 5 | ForEach-Object {
-            $line = $_
-            $json = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
-            
-            if (-not $json) {
-                Write-Host $line -ForegroundColor DarkGray
-                return
+        $file = Get-Item $logPath
+        $currentWriteTime = $file.LastWriteTime
+
+        if ($script:lastLogWriteTime -ne $currentWriteTime) {
+            # Get only the new content since the last check
+            $newContent = Get-Content $logPath | Select-Object -Skip $script:lastLogPosition
+    
+            foreach ($line in $newContent) {
+                $json = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+                
+                if (-not $json) {
+                    Write-Host $line -ForegroundColor DarkGray
+                    continue
+                }
+
+                $timestamp = Get-Date -Format "HH:mm:ss"
+
+                # Check for a tool call request
+                if ($json.method -eq 'tools/call') {
+                    $lastToolCall.ID = $json.id
+                    $lastToolCall.Name = $json.params.name
+                    $lastToolCall.Params = $json.params.arguments | ConvertTo-Json -Compress
+                    $lastToolCall.Status = "Executing..."
+                    $lastToolCall.Result = "Waiting for response..."
+                    $lastToolCall.Timestamp = Get-Date
+                    Write-Host "[$timestamp] TOOL CALL  => $($lastToolCall.Name)" -ForegroundColor Magenta
+                }
+                # Check for a response (success or failure)
+                elseif ($json.id -eq $lastToolCall.ID) {
+                    if ($json.result) {
+                        $lastToolCall.Status = "Success"
+                        $lastToolCall.Result = $json.result | ConvertTo-Json -Compress
+                        Write-Host "[$timestamp] SUCCESS    <= Response for $($lastToolCall.Name)" -ForegroundColor Green
+                    }
+                    elseif ($json.error) {
+                        $lastToolCall.Status = "Failed: $($json.error.message)"
+                        $lastToolCall.Result = $json.error | ConvertTo-Json -Compress
+                        Write-Host "[$timestamp] ERROR      <= Response for $($lastToolCall.Name) -> $($json.error.message)" -ForegroundColor Red
+                    }
+                }
             }
 
-            $timestamp = Get-Date -Format "HH:mm:ss"
-
-            # Check for a tool call request
-            if ($json.method -eq 'tools/call') {
-                $lastToolCall.ID = $json.id
-                $lastToolCall.Name = $json.params.name
-                $lastToolCall.Params = $json.params.arguments | ConvertTo-Json -Compress
-                $lastToolCall.Status = "Executing..."
-                $lastToolCall.Result = "Waiting for response..."
-                $lastToolCall.Timestamp = Get-Date
-                Write-Host "[$timestamp] TOOL CALL  => $($lastToolCall.Name)" -ForegroundColor Magenta
-            }
-            # Check for a response (success or failure)
-            elseif ($json.id -eq $lastToolCall.ID) {
-                if ($json.result) {
-                    $lastToolCall.Status = "Success"
-                    $lastToolCall.Result = $json.result | ConvertTo-Json -Compress
-                    Write-Host "[$timestamp] SUCCESS    <= Response for $($lastToolCall.Name)" -ForegroundColor Green
-                }
-                elseif ($json.error) {
-                    $lastToolCall.Status = "Failed: $($json.error.message)"
-                    $lastToolCall.Result = $json.error | ConvertTo-Json -Compress
-                    Write-Host "[$timestamp] ERROR      <= Response for $($lastToolCall.Name) -> $($json.error.message)" -ForegroundColor Red
-                }
-                # Redraw the "Last Tool Call" panel immediately
-                $currentPosition = $Host.UI.RawUI.CursorPosition
-                $Host.UI.RawUI.CursorPosition = @{X=0; Y=6}
-                Write-StatusLine -Label "Tool Name" -Status $lastToolCall.Name -Color 'Cyan'
-                Write-StatusLine -Label "Status" -Status $lastToolCall.Status -Color $(if ($lastToolCall.Status -match 'Success') {'Green'} else {'Red'})
-                Write-Host "  Parameters:                                                                  "
-                $Host.UI.RawUI.CursorPosition = @{X=2; Y=9}
-                Write-Host $lastToolCall.Params -ForegroundColor Gray
-                Write-Host "  Result/Error:                                                                "
-                $Host.UI.RawUI.CursorPosition = @{X=2; Y=11}
-                Write-Host $lastToolCall.Result -ForegroundColor Gray
-                $Host.UI.RawUI.CursorPosition = $currentPosition
-            }
+            # Update state for the next loop
+            $script:lastLogWriteTime = $currentWriteTime
+            $script:lastLogPosition += $newContent.Count
         }
+        
+        Start-Sleep -Seconds 1 # Wait for a moment before the next dashboard refresh
     }
 }
 

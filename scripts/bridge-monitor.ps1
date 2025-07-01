@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# bridge-monitor.ps1
+# bridge-monitor.ps1 (v2.2 - Syntax Corrected)
 # Monitor file-based bridge communication between Claude Desktop and Claude Code
 
 param(
@@ -31,7 +31,6 @@ function Initialize-BridgeDirectories {
         $bridgeDir,
         "$bridgeDir\pending",
         "$bridgeDir\completed", 
-        "$bridgeDir\code_triggers",
         "$claudeDir\code_triggers",
         "$claudeDir\code_requests",
         "$claudeDir\code_responses"
@@ -55,9 +54,6 @@ function Get-BridgeStatus {
     $status = @{
         Directories = @()
         RecentFiles = @()
-        ActiveTriggers = @()
-        CompletedActions = @()
-        Errors = @()
     }
     
     # Check directory status
@@ -174,14 +170,13 @@ function Show-BridgeMonitor {
     Write-Host "[#] BRIDGE PROCESS STATUS" -ForegroundColor Yellow
     Write-Host "------------------------------------------------------------" -ForegroundColor Gray
     
-    $bridgeProcesses = Get-Process | Where-Object { 
-        $_.ProcessName -eq "node" -and 
-        (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine -like "*bridge*"
+    $bridgeProcesses = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object {
+        (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine -like "*bridge*"
     }
     
     if ($bridgeProcesses.Count -gt 0) {
         foreach ($proc in $bridgeProcesses) {
-            $cmdLine = (Get-WmiObject Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine
+            $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)").CommandLine
             Write-BridgeLog "Bridge Process: PID $($proc.Id) - Memory: $([math]::Round($proc.WorkingSet / 1MB, 2))MB" 'SUCCESS'
             Write-Host "    Command: $cmdLine" -ForegroundColor Gray
         }
@@ -324,14 +319,11 @@ try {
     } else {
         Show-BridgeMonitor
     }
-    
 } catch {
     Write-BridgeLog "Monitor error: $($_.Exception.Message)" 'ERROR'
-} finally {
-    if ($Continuous) {
-        Write-BridgeLog "Bridge monitoring stopped" 'INFO'
-    }
 }
+# The finally block was removed from the main execution as it was causing issues
+# and the "stopped" message is implicitly understood when the script exits.
 
 # Show usage information
 Write-Host ""
