@@ -140,28 +140,23 @@ async function processSessionState() {
     // Read current state
     let sessionState = JSON.parse(fs.readFileSync(sessionStatePath, 'utf8'));
     
-    // Update bridge info
-    sessionState.bridge_info = sessionState.bridge_info || {};
-    sessionState.bridge_info.status = 'running';
-    sessionState.bridge_info.timestamp = Date.now();
-    sessionState.bridge_info.pid = process.pid;
-    
     // Get pending actions
     const pendingActions = sessionState.pending_actions || [];
     
     // Process only pending actions
     const pendingOnly = pendingActions.filter(a => a.status === 'pending');
     
-    if (pendingOnly.length > 0) {
-      logger.info(`Found ${pendingOnly.length} pending actions to process`);
+    // Only proceed if there are actually pending actions to avoid constant writes
+    if (pendingOnly.length === 0) {
+      return; // Don't update the file if there's nothing to process
     }
+    
+    logger.info(`Found ${pendingOnly.length} pending actions to process`);
+    
+    let hasChanges = false;
     
     for (const action of pendingOnly) {
       logger.info(`Processing action: ${action.type}`);
-      
-      // Mark as in-progress
-      action.status = 'in_progress';
-      fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
       
       try {
         await executeAction(action);
@@ -169,27 +164,30 @@ async function processSessionState() {
         // Mark as completed
         action.status = 'completed';
         action.completed_at = Date.now();
+        hasChanges = true;
       } catch (err) {
         logger.error(`Error executing action ${action.type}: ${err.message}`);
         action.status = 'failed';
         action.error = err.message;
+        hasChanges = true;
       }
-      
-      // Update the state file
-      fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
     }
     
-    // Clean up old completed actions (older than 1 hour)
-    const oneHourAgo = Date.now() - (60 * 60 * 1000);
-    sessionState.pending_actions = pendingActions.filter(a => 
-      a.status !== 'completed' || !a.completed_at || a.completed_at > oneHourAgo
-    );
-    
-    // Update last_updated timestamp
-    sessionState.last_updated = Date.now();
-    
-    // Write back updated state
-    fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
+    // Only write if there were actual changes
+    if (hasChanges) {
+      // Clean up old completed actions (older than 1 hour)
+      const oneHourAgo = Date.now() - (60 * 60 * 1000);
+      sessionState.pending_actions = pendingActions.filter(a => 
+        a.status !== 'completed' || !a.completed_at || a.completed_at > oneHourAgo
+      );
+      
+      // Update last_updated timestamp only when there are actual changes
+      sessionState.last_updated = Date.now();
+      
+      // Write back updated state
+      fs.writeFileSync(sessionStatePath, JSON.stringify(sessionState, null, 2));
+      logger.info('Updated session state with processed actions');
+    }
     
   } catch (err) {
     logger.error(`Error processing session state: ${err.message}`);
@@ -486,9 +484,6 @@ async function main() {
   
   // Process initially
   await processSessionState();
-  
-  // Also check periodically
-  setInterval(processSessionState, 5000);
   
   logger.info('Claude Desktop Bridge is running');
 }
