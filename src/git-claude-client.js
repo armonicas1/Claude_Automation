@@ -1,6 +1,7 @@
 // git-claude-client.js
 // Specialized client for Git automation using Claude Code and Claude Desktop integration
 
+import { pathToFileURL } from 'url';
 import ClaudeCodeClient from './claude-code-client.js';
 import fs from 'fs';
 import path from 'path';
@@ -202,6 +203,32 @@ class GitClaudeClient extends ClaudeCodeClient {
    */
   setProjectPath(projectPath) {
     this.projectPath = projectPath;
+  }
+
+  /**
+   * Execute an action script
+   * @param {string} action - Name of the action to execute
+   * @param {object} params - Parameters to pass to the action
+   * @returns {Promise<object>} Action result
+   */
+  async executeAction(action, params = {}) {
+    try {
+      const actionPath = path.join(this.actionsDir, `${action}.js`);
+      if (!fs.existsSync(actionPath)) {
+        throw new Error(`Action '${action}' not found`);
+      }
+      
+      // Use pathToFileURL to handle Windows paths correctly
+      const mod = await import(pathToFileURL(actionPath));
+      if (typeof mod.default !== 'function') {
+        throw new Error(`Action '${action}' does not have a default export function`);
+      }
+
+      return await mod.default(params);
+    } catch (err) {
+      console.error(`❌ Action '${action}' execution failed:`, err.message);
+      throw err;
+    }
   }
 }
 
